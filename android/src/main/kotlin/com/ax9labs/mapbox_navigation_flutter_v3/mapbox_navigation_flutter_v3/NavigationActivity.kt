@@ -3,25 +3,35 @@ package com.ax9labs.mapbox_navigation_flutter_v3.mapbox_navigation_flutter_v3
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.location.LocationManager
 import android.os.Bundle
+import android.util.Base64
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.isVisible
 import com.mapbox.api.directions.v5.models.RouteOptions
 import com.mapbox.common.MapboxOptions
 import com.mapbox.geojson.Point
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
 import com.mapbox.maps.plugin.animation.camera
+import com.mapbox.maps.plugin.annotation.annotations
+import com.mapbox.maps.plugin.annotation.generated.PointAnnotationManager
+import com.mapbox.maps.plugin.annotation.generated.PointAnnotationOptions
+import com.mapbox.maps.plugin.annotation.generated.createPointAnnotationManager
 import com.mapbox.maps.plugin.locationcomponent.location
 import com.mapbox.navigation.base.ExperimentalPreviewMapboxNavigationAPI
 import com.mapbox.navigation.base.extensions.applyDefaultNavigationOptions
 import com.mapbox.navigation.base.extensions.applyLanguageAndVoiceUnitOptions
+import com.mapbox.navigation.base.formatter.DistanceFormatterOptions
 import com.mapbox.navigation.base.options.NavigationOptions
 import com.mapbox.navigation.base.route.NavigationRoute
 import com.mapbox.navigation.base.route.NavigationRouterCallback
 import com.mapbox.navigation.base.route.RouterFailure
 import com.mapbox.navigation.core.MapboxNavigation
 import com.mapbox.navigation.core.directions.session.RoutesObserver
+import com.mapbox.navigation.core.formatter.MapboxDistanceFormatter
 import com.mapbox.navigation.core.lifecycle.MapboxNavigationApp
 import com.mapbox.navigation.core.lifecycle.MapboxNavigationObserver
 import com.mapbox.navigation.core.lifecycle.requireMapboxNavigation
@@ -30,6 +40,12 @@ import com.mapbox.navigation.core.replay.route.ReplayRouteMapper
 import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
+import com.mapbox.navigation.core.trip.session.VoiceInstructionsObserver
+import com.mapbox.navigation.tripdata.maneuver.api.MapboxManeuverApi
+import com.mapbox.navigation.tripdata.progress.api.MapboxTripProgressApi
+import com.mapbox.navigation.tripdata.progress.model.TripProgressUpdateFormatter
+import com.mapbox.navigation.ui.components.maneuver.view.MapboxManeuverView
+import com.mapbox.navigation.ui.components.tripprogress.view.MapboxTripProgressView
 import com.mapbox.navigation.ui.maps.camera.NavigationCamera
 import com.mapbox.navigation.ui.maps.camera.data.MapboxNavigationViewportDataSource
 import com.mapbox.navigation.ui.maps.camera.lifecycle.NavigationBasicGesturesHandler
@@ -38,36 +54,42 @@ import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineApi
 import com.mapbox.navigation.ui.maps.route.line.api.MapboxRouteLineView
 import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineApiOptions
 import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineViewOptions
+import com.mapbox.navigation.voice.api.MapboxSpeechApi
+import com.mapbox.navigation.voice.api.MapboxVoiceInstructionsPlayer
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
  * Hosts turn-by-turn navigation full-screen, composed from Mapbox Navigation
  * SDK v3's "standalone" building blocks (route request, route line
- * rendering, following camera) rather than a turnkey Drop-In UI screen -
- * as of writing, Mapbox's own current example repo
- * (github.com/mapbox/mapbox-navigation-android-examples, `main` branch)
- * no longer demonstrates a Drop-In `NavigationView`, only these standalone
+ * rendering, following camera, maneuver banner, trip progress, voice
+ * instructions, custom marker annotations) rather than a turnkey Drop-In UI
+ * screen - as of writing, Mapbox's own current example repo
+ * (github.com/mapbox/mapbox-navigation-android-examples, `main` branch) no
+ * longer demonstrates a Drop-In `NavigationView`, only these standalone
  * pieces, so this is built directly against APIs verified in that repo's
  * real, current example activities (FetchARouteActivity,
  * RenderRouteLineActivity, ShowCameraTransitionsActivity,
- * CustomArrivalActivity).
- *
- * MVP scope: route request, route line on the map, a following camera, and
- * progress-based arrival detection. NOT yet included (left as follow-up,
- * see README): maneuver banner (MapboxManeuverApi/View), trip progress
- * (MapboxTripProgressApi/View), speed limit badge, and voice instructions
- * (MapboxVoiceInstructionsPlayer) - each is a real, separate standalone
- * component in the same SDK, not fundamentally different work, just not
- * wired up yet.
+ * CustomArrivalActivity, ShowManeuversActivity, ShowTripProgressActivity,
+ * PlayVoiceInstructionsActivity) and mapbox-maps-android's
+ * PointAnnotationActivity.
  */
 @OptIn(ExperimentalPreviewMapboxNavigationAPI::class)
 class NavigationActivity : AppCompatActivity() {
     private lateinit var mapView: MapView
+    private lateinit var maneuverView: MapboxManeuverView
+    private lateinit var tripProgressView: MapboxTripProgressView
     private lateinit var viewportDataSource: MapboxNavigationViewportDataSource
     private lateinit var navigationCamera: NavigationCamera
     private lateinit var routeLineApi: MapboxRouteLineApi
     private lateinit var routeLineView: MapboxRouteLineView
+
+    private lateinit var maneuverApi: MapboxManeuverApi
+    private lateinit var tripProgressApi: MapboxTripProgressApi
+    private lateinit var speechApi: MapboxSpeechApi
+    private lateinit var voiceInstructionsPlayer: MapboxVoiceInstructionsPlayer
+
+    private var pointAnnotationManager: PointAnnotationManager? = null
 
     private var arrived = false
     private var finishedWithResult = false
@@ -78,18 +100,20 @@ class NavigationActivity : AppCompatActivity() {
      * Drives simulated movement along the active route when
      * [NavigationStartOptions.simulateRoute] is set. Only self-sustains
      * once seeded with an initial location push (see
-     * [seedReplayAtOrigin]) - it schedules further simulated positions off
-     * of each route-progress tick, so it needs one real tick to bootstrap.
-     * Real, verified pattern from Mapbox's own CustomArrivalActivity /
-     * RenderRouteLineActivity examples - `startReplayTripSession()` alone
-     * (what the first version of this file did) configures replay mode
-     * but never actually feeds it any events, so nothing moves.
+     * [startSimulatedTripSession]) - it schedules further simulated
+     * positions off of each route-progress tick, but needs one real tick to
+     * bootstrap. Real, verified pattern from Mapbox's own
+     * CustomArrivalActivity / RenderRouteLineActivity examples -
+     * `startReplayTripSession()` alone (what the first version of this file
+     * did) configures replay mode but never actually feeds it any events,
+     * so nothing moves.
      */
     private var replayProgressObserver: ReplayProgressObserver? = null
 
     private lateinit var destination: Point
     private lateinit var waypoints: List<Point>
     private lateinit var startOptions: NavigationStartOptions
+    private lateinit var markers: List<NavigationMarkerData>
 
     private val locationObserver =
         object : LocationObserver {
@@ -118,6 +142,17 @@ class NavigationActivity : AppCompatActivity() {
             viewportDataSource.onRouteProgressChanged(routeProgress)
             viewportDataSource.evaluate()
 
+            if (startOptions.bannerInstructionsEnabled) {
+                val maneuvers = maneuverApi.getManeuvers(routeProgress)
+                maneuvers.onValue { maneuverList ->
+                    maneuverView.isVisible = true
+                    maneuverView.renderManeuvers(maneuvers)
+                }
+            }
+
+            tripProgressView.isVisible = true
+            tripProgressView.render(tripProgressApi.getTripProgress(routeProgress))
+
             // Arrival detection: mirrors the pattern Mapbox's own examples use
             // (CustomArrivalActivity) - there is no single "arrived" event,
             // so proximity to the destination plus distance-remaining is
@@ -125,6 +160,16 @@ class NavigationActivity : AppCompatActivity() {
             if (!arrived && routeProgress.distanceRemaining <= ARRIVAL_DISTANCE_THRESHOLD_METERS) {
                 arrived = true
                 finishWithResult(RESULT_ARRIVED)
+            }
+        }
+
+    private val voiceInstructionsObserver =
+        VoiceInstructionsObserver { voiceInstructions ->
+            speechApi.generate(voiceInstructions) { expected ->
+                expected.fold(
+                    { error -> voiceInstructionsPlayer.play(error.fallback) { speechApi.clean(error.fallback) } },
+                    { value -> voiceInstructionsPlayer.play(value.announcement) { speechApi.clean(value.announcement) } }
+                )
             }
         }
 
@@ -148,6 +193,8 @@ class NavigationActivity : AppCompatActivity() {
                 }
                 viewportDataSource.clearRouteData()
                 viewportDataSource.evaluate()
+                maneuverView.isVisible = false
+                tripProgressView.isVisible = false
             }
         }
 
@@ -159,6 +206,9 @@ class NavigationActivity : AppCompatActivity() {
                     mapboxNavigation.registerLocationObserver(locationObserver)
                     mapboxNavigation.registerRouteProgressObserver(routeProgressObserver)
                     mapboxNavigation.registerRoutesObserver(routesObserver)
+                    if (startOptions.voiceInstructionsEnabled) {
+                        mapboxNavigation.registerVoiceInstructionsObserver(voiceInstructionsObserver)
+                    }
                     requestRoute(mapboxNavigation)
                 }
 
@@ -166,6 +216,7 @@ class NavigationActivity : AppCompatActivity() {
                     mapboxNavigation.unregisterLocationObserver(locationObserver)
                     mapboxNavigation.unregisterRouteProgressObserver(routeProgressObserver)
                     mapboxNavigation.unregisterRoutesObserver(routesObserver)
+                    mapboxNavigation.unregisterVoiceInstructionsObserver(voiceInstructionsObserver)
                 }
             },
         onInitialize = this::initNavigation
@@ -186,9 +237,12 @@ class NavigationActivity : AppCompatActivity() {
         waypoints = parsedWaypoints
         destination = parsedWaypoints.last()
         startOptions = parseOptions(intent)
+        markers = parseMarkers(intent)
 
         setContentView(R.layout.mnfv3_activity_navigation)
         mapView = findViewById(R.id.mnfv3_mapView)
+        maneuverView = findViewById(R.id.mnfv3_maneuverView)
+        tripProgressView = findViewById(R.id.mnfv3_tripProgressView)
 
         val mapboxMap = mapView.mapboxMap
         viewportDataSource = MapboxNavigationViewportDataSource(mapboxMap)
@@ -210,13 +264,22 @@ class NavigationActivity : AppCompatActivity() {
             )
         routeLineApi = MapboxRouteLineApi(MapboxRouteLineApiOptions.Builder().build())
 
+        val distanceFormatterOptions = DistanceFormatterOptions.Builder(this).build()
+        maneuverApi = MapboxManeuverApi(MapboxDistanceFormatter(distanceFormatterOptions))
+        tripProgressApi =
+            MapboxTripProgressApi(TripProgressUpdateFormatter.Builder(this).build())
+        speechApi = MapboxSpeechApi(this, startOptions.language)
+        voiceInstructionsPlayer = MapboxVoiceInstructionsPlayer(this, startOptions.language)
+
         mapView.location.apply {
             setLocationProvider(navigationLocationProvider)
             puckBearingEnabled = true
             enabled = true
         }
 
-        mapboxMap.loadStyle(Style.MAPBOX_STREETS) {}
+        mapboxMap.loadStyle(Style.MAPBOX_STREETS) {
+            renderMarkers()
+        }
     }
 
     override fun onStart() {
@@ -237,6 +300,30 @@ class NavigationActivity : AppCompatActivity() {
         MapboxNavigationApp.setup(
             NavigationOptions.Builder(this).build()
         )
+    }
+
+    /**
+     * Renders [markers] as custom-bitmap point annotations - the reason
+     * this plugin exists over a stock package, per the driving requirement:
+     * incident/safe-zone markers rendered with the app's own icons, visible
+     * on the map both before and during active turn-by-turn guidance (this
+     * is called once from the style-load callback and the annotations
+     * persist independently of route/trip-session state).
+     */
+    private fun renderMarkers() {
+        if (markers.isEmpty()) return
+        val manager = pointAnnotationManager ?: mapView.annotations.createPointAnnotationManager().also {
+            pointAnnotationManager = it
+        }
+        manager.deleteAll()
+        markers.forEach { marker ->
+            manager.create(
+                PointAnnotationOptions()
+                    .withPoint(marker.point)
+                    .withIconImage(marker.bitmap)
+                    .withIconSize(marker.iconScale)
+            )
+        }
     }
 
     /**
@@ -343,6 +430,9 @@ class NavigationActivity : AppCompatActivity() {
         super.onDestroy()
         if (::routeLineApi.isInitialized) routeLineApi.cancel()
         if (::routeLineView.isInitialized) routeLineView.cancel()
+        if (::maneuverApi.isInitialized) maneuverApi.cancel()
+        if (::speechApi.isInitialized) speechApi.cancel()
+        if (::voiceInstructionsPlayer.isInitialized) voiceInstructionsPlayer.shutdown()
         // Guards against the early-return path in onCreate() (missing
         // token/waypoints), where onStart() never ran and the
         // `by requireMapboxNavigation(...)` delegate was never triggered -
@@ -369,6 +459,13 @@ class NavigationActivity : AppCompatActivity() {
         val simulateRoute: Boolean
     )
 
+    private data class NavigationMarkerData(
+        val id: String,
+        val point: Point,
+        val bitmap: Bitmap,
+        val iconScale: Double
+    )
+
     private fun parseWaypoints(intent: Intent): List<Point> {
         val json = intent.getStringExtra(EXTRA_WAYPOINTS) ?: return emptyList()
         val array = JSONArray(json)
@@ -390,10 +487,50 @@ class NavigationActivity : AppCompatActivity() {
         )
     }
 
+    /**
+     * Marker icons cross the platform channel as base64-encoded PNG bytes
+     * (see [NavigationMarker] on the Dart side) - JSON has no native binary
+     * type, and this keeps the Intent extra a plain string like waypoints/
+     * options above. Malformed entries (bad base64, undecodable image
+     * bytes) are dropped rather than crashing navigation startup.
+     */
+    private fun parseMarkers(intent: Intent): List<NavigationMarkerData> {
+        val json = intent.getStringExtra(EXTRA_MARKERS) ?: return emptyList()
+        val array = JSONArray(json)
+        return (0 until array.length()).mapNotNull { i ->
+            runCatching {
+                val obj = array.getJSONObject(i)
+                val bytes = Base64.decode(obj.getString("icon"), Base64.DEFAULT)
+                // Mapbox's annotation image path (ExtensionUtils.toMapboxImage)
+                // hard-requires ARGB_8888 and throws otherwise - found only by
+                // running this on a real device: decodeByteArray's config
+                // depends on the source PNG's color type (e.g. an
+                // ImageMagick-generated indexed/paletted PNG decoded as
+                // RGB_565), so it must be forced explicitly rather than
+                // relying on the decoder's default.
+                val decodeOptions = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
+                val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions) ?: return@mapNotNull null
+                val bitmap =
+                    if (decoded.config == Bitmap.Config.ARGB_8888) {
+                        decoded
+                    } else {
+                        decoded.copy(Bitmap.Config.ARGB_8888, false).also { decoded.recycle() }
+                    }
+                NavigationMarkerData(
+                    id = obj.getString("id"),
+                    point = Point.fromLngLat(obj.getDouble("longitude"), obj.getDouble("latitude")),
+                    bitmap = bitmap,
+                    iconScale = obj.optDouble("iconScale", 1.0)
+                )
+            }.getOrNull()
+        }
+    }
+
     companion object {
         const val EXTRA_RESULT = "com.ax9labs.mapbox_navigation_flutter_v3.RESULT"
         private const val EXTRA_WAYPOINTS = "com.ax9labs.mapbox_navigation_flutter_v3.WAYPOINTS"
         private const val EXTRA_OPTIONS = "com.ax9labs.mapbox_navigation_flutter_v3.OPTIONS"
+        private const val EXTRA_MARKERS = "com.ax9labs.mapbox_navigation_flutter_v3.MARKERS"
 
         const val RESULT_ARRIVED = "arrived"
         const val RESULT_CANCELLED = "cancelled"
@@ -404,7 +541,8 @@ class NavigationActivity : AppCompatActivity() {
         fun newIntent(
             context: Context,
             waypoints: List<Map<String, Any?>>,
-            options: Map<String, Any?>
+            options: Map<String, Any?>,
+            markers: List<Map<String, Any?>> = emptyList()
         ): Intent {
             val waypointsJson =
                 JSONArray().apply {
@@ -418,10 +556,25 @@ class NavigationActivity : AppCompatActivity() {
                         )
                     }
                 }
+            val markersJson =
+                JSONArray().apply {
+                    markers.forEach { m ->
+                        put(
+                            JSONObject().apply {
+                                put("id", m["id"])
+                                put("latitude", m["latitude"])
+                                put("longitude", m["longitude"])
+                                put("icon", m["icon"])
+                                put("iconScale", m["iconScale"])
+                            }
+                        )
+                    }
+                }
             val optionsJson = JSONObject(options)
             return Intent(context, NavigationActivity::class.java)
                 .putExtra(EXTRA_WAYPOINTS, waypointsJson.toString())
                 .putExtra(EXTRA_OPTIONS, optionsJson.toString())
+                .putExtra(EXTRA_MARKERS, markersJson.toString())
         }
     }
 }

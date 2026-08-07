@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mapbox_navigation_flutter_v3/mapbox_navigation_flutter_v3_method_channel.dart';
@@ -85,6 +87,41 @@ void main() {
         'bannerInstructionsEnabled': true,
         'simulateRoute': true,
       });
+      expect(args['markers'], isEmpty);
+    });
+
+    test('serializes marker icon bytes as base64', () async {
+      MethodCall? received;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+            received = methodCall;
+            return 'arrived';
+          });
+      final iconBytes = Uint8List.fromList([137, 80, 78, 71]);
+
+      await platform.startNavigation(
+        waypoints: const [NavigationWaypoint(latitude: 0, longitude: 0)],
+        markers: [
+          NavigationMarker(
+            id: 'incident-1',
+            latitude: 26.2,
+            longitude: -98.2,
+            icon: iconBytes,
+            iconScale: 1.5,
+          ),
+        ],
+      );
+
+      final args = received!.arguments as Map;
+      expect(args['markers'], [
+        {
+          'id': 'incident-1',
+          'latitude': 26.2,
+          'longitude': -98.2,
+          'icon': base64Encode(iconBytes),
+          'iconScale': 1.5,
+        },
+      ]);
     });
 
     test('falls back to NavigationResult.error for an unrecognized result code', () async {

@@ -39,9 +39,14 @@ abstract class MapboxNavigationFlutterV3Platform extends PlatformInterface {
   /// Launches the native full-screen turn-by-turn navigation UI to the
   /// given [waypoints], starting from the device's current location.
   /// Suspends until the user arrives, cancels, or navigation errors.
+  ///
+  /// [markers] are rendered on the map for the duration of the navigation
+  /// session (both on the base map and, where supported, alongside the
+  /// turn-by-turn guidance view) - see [NavigationMarker].
   Future<NavigationResult> startNavigation({
     required List<NavigationWaypoint> waypoints,
     NavigationOptions options = const NavigationOptions(),
+    List<NavigationMarker> markers = const [],
   }) {
     throw UnimplementedError('startNavigation() has not been implemented.');
   }

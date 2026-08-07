@@ -32,6 +32,7 @@ class MethodChannelMapboxNavigationFlutterV3 extends MapboxNavigationFlutterV3Pl
   Future<NavigationResult> startNavigation({
     required List<NavigationWaypoint> waypoints,
     NavigationOptions options = const NavigationOptions(),
+    List<NavigationMarker> markers = const [],
   }) async {
     try {
       final resultCode = await methodChannel.invokeMethod<String>(
@@ -39,6 +40,7 @@ class MethodChannelMapboxNavigationFlutterV3 extends MapboxNavigationFlutterV3Pl
         {
           'waypoints': waypoints.map((w) => w.toJson()).toList(),
           'options': options.toJson(),
+          'markers': markers.map((m) => m.toJson()).toList(),
         },
       );
       return NavigationResult.values.firstWhere(

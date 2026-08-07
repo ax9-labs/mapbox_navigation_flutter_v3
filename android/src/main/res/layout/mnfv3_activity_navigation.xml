@@ -8,4 +8,24 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- Turn arrow, instruction text, and distance-to-maneuver. Hidden
+         until options.bannerInstructionsEnabled and a route is active. -->
+    <com.mapbox.navigation.ui.components.maneuver.view.MapboxManeuverView
+        android:id="@+id/mnfv3_maneuverView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_margin="16dp"
+        android:visibility="gone" />
+
+    <!-- ETA / distance-remaining / time-remaining bar. Hidden until a
+         route is active. -->
+    <com.mapbox.navigation.ui.components.tripprogress.view.MapboxTripProgressView
+        android:id="@+id/mnfv3_tripProgressView"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_margin="16dp"
+        android:visibility="gone" />
+
 </FrameLayout>

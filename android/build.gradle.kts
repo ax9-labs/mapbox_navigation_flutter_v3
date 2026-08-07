@@ -91,6 +91,11 @@ kotlin {
 
 dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
+    // MapboxManeuverView extends ConstraintLayout - ui-components only pulls
+    // this in as a transitive `implementation` dep, which isn't exposed on
+    // our own compile classpath, so referencing the view directly (rather
+    // than just inflating it from XML) needs it declared here too.
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("com.mapbox.navigationcore:navigation:3.11.6")
     implementation("com.mapbox.navigationcore:ui-components:3.11.6")
 

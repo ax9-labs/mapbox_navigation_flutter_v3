@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mapbox_navigation_flutter_v3/mapbox_navigation_flutter_v3.dart';
 import 'package:mapbox_navigation_flutter_v3/mapbox_navigation_flutter_v3_platform_interface.dart';
@@ -10,6 +12,7 @@ class MockMapboxNavigationFlutterV3Platform
   String? initializedWithToken;
   List<NavigationWaypoint>? lastWaypoints;
   NavigationOptions? lastOptions;
+  List<NavigationMarker>? lastMarkers;
   NavigationResult resultToReturn = NavigationResult.arrived;
 
   @override
@@ -24,9 +27,11 @@ class MockMapboxNavigationFlutterV3Platform
   Future<NavigationResult> startNavigation({
     required List<NavigationWaypoint> waypoints,
     NavigationOptions options = const NavigationOptions(),
+    List<NavigationMarker> markers = const [],
   }) async {
     lastWaypoints = waypoints;
     lastOptions = options;
+    lastMarkers = markers;
     return resultToReturn;
   }
 }
@@ -69,5 +74,27 @@ void main() {
     expect(result, NavigationResult.cancelled);
     expect(fakePlatform.lastWaypoints, waypoints);
     expect(fakePlatform.lastOptions, options);
+    expect(fakePlatform.lastMarkers, isEmpty);
+  });
+
+  test('startNavigation forwards markers to the platform implementation', () async {
+    final plugin = MapboxNavigationFlutterV3();
+    final fakePlatform = MockMapboxNavigationFlutterV3Platform();
+    MapboxNavigationFlutterV3Platform.instance = fakePlatform;
+    final markers = [
+      NavigationMarker(
+        id: 'incident-1',
+        latitude: 1,
+        longitude: 2,
+        icon: Uint8List.fromList([1, 2, 3]),
+      ),
+    ];
+
+    await plugin.startNavigation(
+      waypoints: const [NavigationWaypoint(latitude: 1, longitude: 2)],
+      markers: markers,
+    );
+
+    expect(fakePlatform.lastMarkers, markers);
   });
 }

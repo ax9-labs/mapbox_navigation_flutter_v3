@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 /// A single stop along a navigation route. The last waypoint in the list
 /// passed to [MapboxNavigationFlutterV3.startNavigation] is the final
 /// destination; earlier ones are intermediate stops.
@@ -19,6 +22,44 @@ class NavigationWaypoint {
         'latitude': latitude,
         'longitude': longitude,
         'name': name,
+      };
+}
+
+/// A custom-rendered marker shown on the map during navigation - the
+/// specific capability that made Mapbox worth using over Google in the
+/// first place (arbitrary bitmap icons, not just a fixed pin set).
+///
+/// [icon] must be PNG-encoded bytes (any resolution; consider @2x/@3x
+/// density for crisp rendering on high-DPI screens - the native side
+/// renders it at its native pixel size scaled by [iconScale], it does not
+/// do its own density adjustment).
+class NavigationMarker {
+  const NavigationMarker({
+    required this.id,
+    required this.latitude,
+    required this.longitude,
+    required this.icon,
+    this.iconScale = 1.0,
+  });
+
+  /// Caller-assigned identifier. Not currently used natively beyond
+  /// round-tripping (no per-marker update/remove API yet - markers are
+  /// set once for the whole navigation session via [MapboxNavigationFlutterV3.startNavigation]),
+  /// but required now so that API is additive later without a breaking
+  /// change.
+  final String id;
+
+  final double latitude;
+  final double longitude;
+  final Uint8List icon;
+  final double iconScale;
+
+  Map<String, Object?> toJson() => {
+        'id': id,
+        'latitude': latitude,
+        'longitude': longitude,
+        'icon': base64Encode(icon),
+        'iconScale': iconScale,
       };
 }
 

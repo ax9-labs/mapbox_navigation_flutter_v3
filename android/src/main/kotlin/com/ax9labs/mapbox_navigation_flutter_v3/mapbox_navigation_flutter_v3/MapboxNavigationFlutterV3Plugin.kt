@@ -73,6 +73,8 @@ class MapboxNavigationFlutterV3Plugin :
         val waypoints = call.argument<List<Map<String, Any?>>>("waypoints")
         @Suppress("UNCHECKED_CAST")
         val options = call.argument<Map<String, Any?>>("options") ?: emptyMap()
+        @Suppress("UNCHECKED_CAST")
+        val markers = call.argument<List<Map<String, Any?>>>("markers") ?: emptyList()
 
         if (waypoints.isNullOrEmpty()) {
             result.error("NO_WAYPOINTS", "At least one waypoint is required", null)
@@ -84,7 +86,8 @@ class MapboxNavigationFlutterV3Plugin :
             NavigationActivity.newIntent(
                 context = currentActivity,
                 waypoints = waypoints,
-                options = options
+                options = options,
+                markers = markers
             )
         currentActivity.startActivityForResult(intent, NAVIGATION_REQUEST_CODE)
     }

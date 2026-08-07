@@ -26,14 +26,35 @@ package this org actually maintains.
     instead of crashing, confirmed.
   Four real bugs were found and fixed only by actually running it (see
   Fixed section below) — the compiler alone did not catch any of them.
-  **Not yet built**: maneuver banner, trip progress bar, speed limit
-  badge, voice instructions, and off-route rerouting UI feedback — each
-  is a real, separate Mapbox SDK component (`MapboxManeuverApi`/`View`,
-  `MapboxTripProgressApi`/`View`, `MapboxVoiceInstructionsPlayer`), same
-  pattern as what's already working, just not done. Also untested: a
-  physical device (only an emulator so far) and a real multi-minute drive
-  with actual maneuvers along the way (both test routes were short,
-  mostly-straight-line for practical testing reasons).
+  **Turn-by-turn guidance and custom markers are now built and verified
+  running** (not just compiled):
+  - Trip progress bar (`MapboxTripProgressApi`/`MapboxTripProgressView`):
+    confirmed rendering live distance/ETA/time-remaining data during an
+    actual navigation session (screenshot showed `< 1 min` / `5 ft` /
+    live clock updating in real time).
+  - Voice instructions (`MapboxSpeechApi`/`MapboxVoiceInstructionsPlayer`/
+    `VoiceInstructionsObserver`, gated by
+    `options.voiceInstructionsEnabled`): confirmed the on-device TTS
+    engine actually connects and cleanly disconnects across the session
+    lifecycle (`TextToSpeech: Connected to TTS engine` /
+    `Disconnected from TTS engine` in logcat), driven by a real
+    `voice_instructions=true` directions request.
+  - Maneuver banner (`MapboxManeuverApi`/`MapboxManeuverView`, gated by
+    `options.bannerInstructionsEnabled`): wired into the same
+    `RouteProgressObserver` tick as trip progress (which is confirmed
+    live) and ran crash-free across 6+ full navigation sessions; not yet
+    independently caught mid-render in a screenshot (short test routes +
+    3x replay speed made the window hard to hit) — flagged as the one
+    remaining gap in visual confirmation, not a known defect.
+  - Custom markers (`PointAnnotationManager`, base64-encoded PNG icons
+    passed from Dart via `NavigationMarker`): rendering crashed on first
+    run (see Fixed section, bug 5) and has been crash-free across every
+    run since the fix; not yet independently confirmed on-screen for the
+    same screenshot-timing reason as the maneuver banner.
+  Also untested: a physical device (only an emulator so far) and a real
+  multi-minute drive with actual turn maneuvers along the way (test
+  routes were short and mostly straight-line for practical testing
+  reasons).
 - **iOS**: not implemented. `startNavigation` currently returns a
   `NOT_IMPLEMENTED` error rather than hanging silently.
 
@@ -63,6 +84,23 @@ package this org actually maintains.
    dependency graph. **Every app consuming this plugin needs the same
    Mapbox repo block in its own root `build.gradle.kts`** — see
    `example/android/build.gradle.kts` for the exact block to copy.
+5. **`IllegalArgumentException: Only ARGB_8888 bitmap config is
+   supported!`** — crashed on the very first custom-marker run.
+   `BitmapFactory.decodeByteArray(bytes, 0, bytes.size)` (no options) does
+   not reliably return an `ARGB_8888` bitmap — it depends on the source
+   PNG's color type, and Mapbox's `PointAnnotationManager` image path
+   (`ExtensionUtils.toMapboxImage`) hard-requires that config. Fixed by
+   passing `BitmapFactory.Options().apply { inPreferredConfig =
+   Bitmap.Config.ARGB_8888 }` explicitly and converting via `.copy(...)`
+   if the decoder still returns something else.
+6. **`androidx.constraintlayout` compile error** —
+   `MapboxManeuverView extends ConstraintLayout`, but `ui-components`
+   only brings that in as a transitive `implementation` dependency, which
+   Gradle doesn't expose on this module's own compile classpath (needed
+   because the Activity references the view's Kotlin type directly, not
+   just via XML inflation). Fixed by adding
+   `androidx.constraintlayout:constraintlayout:2.1.4` directly to
+   `android/build.gradle.kts`.
 
 ### Why "composed" instead of a drop-in screen
 
