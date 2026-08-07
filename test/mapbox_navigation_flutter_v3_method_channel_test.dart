@@ -78,15 +78,20 @@ void main() {
       expect(args['waypoints'], [
         {'latitude': 26.2, 'longitude': -98.2, 'name': 'Home'},
       ]);
-      expect(args['options'], {
-        'profile': 'cycling',
-        'language': 'es',
-        'voiceInstructionsEnabled': true,
-        'bannerInstructionsEnabled': true,
-        'simulateRoute': true,
-        'arrivalDistanceMeters': 25.0,
-        'simulateSpeedMultiplier': 3.0,
-      });
+      expect(
+        args['options'],
+        allOf([
+          containsPair('profile', 'cycling'),
+          containsPair('language', 'es'),
+          containsPair('voiceInstructionsEnabled', true),
+          containsPair('bannerInstructionsEnabled', true),
+          containsPair('simulateRoute', true),
+          containsPair('arrivalDistanceMeters', 25.0),
+          containsPair('simulateSpeedMultiplier', 3.0),
+          containsPair('theme', isA<Map>()),
+          containsPair('uiOptions', isA<Map>()),
+        ]),
+      );
       expect(args['markers'], isEmpty);
     });
 
@@ -109,6 +114,36 @@ void main() {
       final args = received!.arguments as Map;
       expect(args['options'], containsPair('arrivalDistanceMeters', 10.0));
       expect(args['options'], containsPair('simulateSpeedMultiplier', 1.5));
+    });
+
+    test('serializes theme and uiOptions overrides', () async {
+      MethodCall? received;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+            received = methodCall;
+            return 'arrived';
+          });
+
+      await platform.startNavigation(
+        waypoints: const [NavigationWaypoint(latitude: 0, longitude: 0)],
+        options: const NavigationOptions(
+          theme: TurnByTurnTheme(primaryInstructionColor: 0xFF0057FF, cornerRadius: 16),
+          uiOptions: TurnByTurnUiOptions(
+            showTrafficSignals: true,
+            confirmBeforeExitNavigation: true,
+            showRecenterButton: false,
+          ),
+        ),
+      );
+
+      final args = received!.arguments as Map;
+      final theme = args['options']['theme'] as Map;
+      final uiOptions = args['options']['uiOptions'] as Map;
+      expect(theme, containsPair('primaryInstructionColor', 0xFF0057FF));
+      expect(theme, containsPair('cornerRadius', 16.0));
+      expect(uiOptions, containsPair('showTrafficSignals', true));
+      expect(uiOptions, containsPair('confirmBeforeExitNavigation', true));
+      expect(uiOptions, containsPair('showRecenterButton', false));
     });
 
     test('forwards marker icon bytes as-is (no base64 encoding)', () async {

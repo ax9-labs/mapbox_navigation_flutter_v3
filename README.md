@@ -34,38 +34,44 @@ Gradle dependency resolution rather than at the tests themselves.
     instead of crashing, confirmed.
   Nine real bugs were found and fixed only by actually running it (see
   Fixed section below) — the compiler alone did not catch any of them.
-  **Turn-by-turn guidance, custom markers, and automatic reroute feedback
-  are built and verified running** (not just compiled):
-  - Trip progress bar (`MapboxTripProgressApi`/`MapboxTripProgressView`):
-    confirmed rendering live distance/ETA/time-remaining data during an
-    actual navigation session (screenshot showed `< 1 min` / `5 ft` /
-    live clock updating in real time).
+  **Turn-by-turn guidance, custom markers, automatic reroute feedback, and
+  a redesigned production-style UI are built and verified running** (not
+  just compiled) — see `TURN_BY_TURN_UI_REDESIGN.md` for the full
+  deliverables report on the UI redesign specifically. Highlights:
+  - Primary maneuver banner + "Then ↱ ..." next-maneuver preview + a
+    `BottomSheetBehavior`-driven trip sheet (stop button, large remaining
+    duration, "distance • arrival time", a context-sensitive action
+    button, and a detailed maneuver row) - **all visually confirmed
+    rendering together in one real navigation session**, not just each
+    piece individually (a right-turn icon + "North 32nd Lane" + "200 ft"
+    in the top banner, "8 min" / "2.2 mi • 4:19 pm" in the trip sheet, all
+    populated from live route progress).
   - Voice instructions (`MapboxSpeechApi`/`MapboxVoiceInstructionsPlayer`/
     `VoiceInstructionsObserver`, gated by
     `options.voiceInstructionsEnabled`): confirmed the on-device TTS
     engine actually connects and cleanly disconnects across the session
-    lifecycle (`TextToSpeech: Connected to TTS engine` /
-    `Disconnected from TTS engine` in logcat), driven by a real
-    `voice_instructions=true` directions request.
-  - Maneuver banner (`MapboxManeuverApi`/`MapboxManeuverView`, gated by
-    `options.bannerInstructionsEnabled`): **visually confirmed** rendering
-    a real turn instruction ("North 32nd Lane, 200 ft" with a right-turn
-    arrow) during an actual reroute, alongside a live trip progress bar —
-    this was previously only confirmed crash-free, not seen rendering.
+    lifecycle, driven by a real `voice_instructions=true` directions
+    request.
   - Custom markers (`PointAnnotationManager`, raw PNG bytes passed from
-    Dart via `NavigationMarker`): rendering crashed on first run (see
-    Fixed section) and has been crash-free across every run since the
-    fix; still not independently caught on-screen in a screenshot (the
-    marker's map position hasn't lined up with the camera framing during
-    a capture yet) — the one remaining visual-confirmation gap, not a
-    known defect.
+    Dart via `NavigationMarker`): visually confirmed rendering on the map
+    (a red pin) alongside the route line; crash-free across every run
+    since the ARGB_8888 fix (see Fixed section).
   - Reroute feedback (`RerouteController.RerouteStateObserver`, gated on
     `RerouteState.FetchingRoute`): triggered a real automatic reroute by
     deviating off-route on the emulator (Mapbox's own
     `RerouteController` requested and applied a new route within ~1s,
     confirmed via `reason=deviation` in the directions request log and
-    the route line updating) — crash-free, though the transient banner
-    itself resolved faster than a screenshot could catch it.
+    the route line updating) — crash-free.
+  - Recenter control, camera FOLLOWING/OVERVIEW toggle, arrival panel
+    (checkmark + brief pause before the session ends), and
+    permission/location error surfacing (`LOCATION_PERMISSION_DENIED` with
+    a specific message) — all visually confirmed on-device.
+  - Session-ending via the hardware back button confirmed working
+    (`RESULT_CANCELLED`) on the redesigned UI; the on-screen stop button
+    exercises the identical code path but wasn't independently
+    tap-confirmed this session (emulator touch-input reliability degraded
+    late in a long testing session) — flagged for physical-device
+    verification, not a known defect.
   Also untested: a physical device (only an emulator so far) and a real
   multi-minute drive with actual turn maneuvers along the way (test
   routes were short and mostly straight-line for practical testing
@@ -219,6 +225,33 @@ try {
   // e.message is a human-readable detail for logging.
 }
 ```
+
+### Theming and UI configuration
+
+`NavigationOptions.theme` and `.uiOptions` customize the turn-by-turn
+screen's colors and which pieces of it show - see
+`TURN_BY_TURN_UI_REDESIGN.md` for the full redesign write-up (what's built,
+what's deliberately deferred, and why).
+
+```dart
+options: NavigationOptions(
+  theme: const TurnByTurnTheme(
+    primaryInstructionColor: 0xFF0057FF, // ARGB int, e.g. myColor.value
+    cornerRadius: 16,
+  ),
+  uiOptions: const TurnByTurnUiOptions(
+    confirmBeforeExitNavigation: true,
+    showTrafficSignals: false, // default - see note below
+  ),
+),
+```
+
+Every `TurnByTurnTheme` field is optional (`null` = built-in default,
+which respects light/dark mode); every `TurnByTurnUiOptions` flag defaults
+to the full experience. `showTrafficSignals` is a reserved extension point,
+not a working feature yet — the Mapbox Navigation SDK doesn't currently
+expose reliable traffic-signal/intersection data for this plugin to render
+from, so turning it on is a no-op rather than fabricated markers.
 
 ## Architecture (Android)
 

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark-mode counterpart to values/mnfv3_colors.xml - only the surface/text
+     roles actually need to change for readability; route/traffic/accent
+     colors stay legible on both. -->
+<resources>
+    <color name="mnfv3_primary_instruction_bg">#0D47A1</color>
+    <color name="mnfv3_primary_instruction_fg">#FFFFFF</color>
+
+    <color name="mnfv3_secondary_instruction_bg">#092E6B</color>
+    <color name="mnfv3_secondary_instruction_fg">#FFFFFF</color>
+
+    <color name="mnfv3_surface">#1E1E1E</color>
+    <color name="mnfv3_surface_fg">#F2F2F2</color>
+
+    <color name="mnfv3_route_color">#4C9AFF</color>
+    <color name="mnfv3_route_casing_color">#0D47A1</color>
+
+    <color name="mnfv3_traffic_low">#66BB6A</color>
+    <color name="mnfv3_traffic_moderate">#FFCA28</color>
+    <color name="mnfv3_traffic_heavy">#FF8A65</color>
+    <color name="mnfv3_traffic_severe">#EF5350</color>
+
+    <color name="mnfv3_divider">#3A3A3A</color>
+    <color name="mnfv3_secondary_text">#B0B0B0</color>
+    <color name="mnfv3_maneuver_icon">#FFFFFF</color>
+    <color name="mnfv3_sheet_handle">#5A5A5A</color>
+
+    <color name="mnfv3_reroute_bg">#CCFFFFFF</color>
+    <color name="mnfv3_reroute_fg">#1A1A1A</color>
+
+    <color name="mnfv3_gps_warning_bg">#CCFFB300</color>
+    <color name="mnfv3_gps_warning_fg">#1A1A1A</color>
+
+    <color name="mnfv3_recenter_bg">#2A2A2A</color>
+    <color name="mnfv3_recenter_fg">#F2F2F2</color>
+
+    <color name="mnfv3_stop_button_bg">#2A2A2A</color>
+    <color name="mnfv3_stop_button_fg">#F2F2F2</color>
+
+    <color name="mnfv3_arrival_accent">#4CD07E</color>
+</resources>

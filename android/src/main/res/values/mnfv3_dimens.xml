@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="mnfv3_corner_radius">16dp</dimen>
+    <dimen name="mnfv3_elevation">6dp</dimen>
+    <!-- WCAG/Material minimum recommended touch target. -->
+    <dimen name="mnfv3_min_touch_target">48dp</dimen>
+    <dimen name="mnfv3_screen_margin">12dp</dimen>
+    <dimen name="mnfv3_content_padding">16dp</dimen>
+</resources>

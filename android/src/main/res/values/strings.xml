@@ -1,4 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="mnfv3_recalculating_route">Recalculating route…</string>
+    <string name="mnfv3_waiting_for_gps">Waiting for GPS…</string>
+    <string name="mnfv3_then">Then</string>
+
+    <!-- Accessibility / control labels -->
+    <string name="mnfv3_stop_navigation">Stop navigation</string>
+    <string name="mnfv3_recenter_map">Recenter map</string>
+    <string name="mnfv3_show_route_overview">Show route overview</string>
+    <string name="mnfv3_expand_trip_details">Expand trip details</string>
+    <string name="mnfv3_collapse_trip_details">Collapse trip details</string>
+
+    <string name="mnfv3_arrived_title">You\'ve arrived</string>
+
+    <!-- Confirmation dialog for TurnByTurnUiOptions.confirmBeforeExitNavigation -->
+    <string name="mnfv3_stop_navigation_confirm_title">Stop navigation?</string>
+    <string name="mnfv3_stop_navigation_confirm_message">You\'ll need to restart navigation to continue getting directions.</string>
+    <string name="mnfv3_stop_navigation_confirm_positive">Stop</string>
+    <string name="mnfv3_stop_navigation_confirm_negative">Keep navigating</string>
+
+    <!-- Accessibility announcement template for the current maneuver, e.g.
+         "Next maneuver: turn right onto Ash Street in 120 meters" -->
+    <string name="mnfv3_maneuver_announcement_template">Next maneuver: %1$s in %2$s</string>
 </resources>

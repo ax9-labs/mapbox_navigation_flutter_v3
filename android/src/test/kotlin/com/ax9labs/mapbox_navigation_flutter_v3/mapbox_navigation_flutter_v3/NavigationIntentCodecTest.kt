@@ -87,9 +87,43 @@ internal class NavigationIntentCodecTest {
                 bannerInstructionsEnabled = false,
                 simulateRoute = true,
                 arrivalDistanceMeters = 10.0,
-                simulateSpeedMultiplier = 1.5
+                simulateSpeedMultiplier = 1.5,
+                theme = TurnByTurnTheme.DEFAULT,
+                uiOptions = TurnByTurnUiOptions.DEFAULT
             ),
             decoded
         )
+    }
+
+    // --- theme / uiOptions ---
+
+    @Test
+    fun decodeOptions_missingThemeAndUiOptions_usesDefaults() {
+        val decoded = NavigationIntentCodec.decodeOptions("""{"profile": "walking"}""")
+
+        assertEquals(TurnByTurnTheme.DEFAULT, decoded.theme)
+        assertEquals(TurnByTurnUiOptions.DEFAULT, decoded.uiOptions)
+    }
+
+    @Test
+    fun decodeOptions_themeAndUiOptionsOverrides_areApplied() {
+        val json =
+            """
+            {
+              "theme": {"primaryInstructionColor": -16733696, "cornerRadius": 16.0},
+              "uiOptions": {"showTrafficSignals": true, "confirmBeforeExitNavigation": true, "showRecenterButton": false}
+            }
+            """.trimIndent()
+
+        val decoded = NavigationIntentCodec.decodeOptions(json)
+
+        assertEquals(-16733696, decoded.theme.primaryInstructionColor)
+        assertEquals(16.0, decoded.theme.cornerRadius)
+        assertEquals(null, decoded.theme.routeColor)
+        assertEquals(true, decoded.uiOptions.showTrafficSignals)
+        assertEquals(true, decoded.uiOptions.confirmBeforeExitNavigation)
+        assertEquals(false, decoded.uiOptions.showRecenterButton)
+        // Untouched flags keep their defaults.
+        assertEquals(TurnByTurnUiOptions.DEFAULT.showTopBanner, decoded.uiOptions.showTopBanner)
     }
 }

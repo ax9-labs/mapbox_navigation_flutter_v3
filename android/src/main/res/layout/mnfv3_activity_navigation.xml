@@ -1,5 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+  Structure (see NavigationActivity.kt + NavigationTheme.kt for how this is
+  populated/themed):
+
+  - mnfv3_mapView: full-screen map, the base layer everything else floats over.
+  - mnfv3_topOverlay: maneuver card + next-maneuver preview + reroute/GPS
+    pills, anchored to the top safe area (padding applied at runtime from
+    WindowInsets, not hardcoded here).
+  - mnfv3_recenterButton: shown only when the camera has left FOLLOWING mode.
+  - mnfv3_bottomSheet: CoordinatorLayout + BottomSheetBehavior (COLLAPSED
+    peeks the trip summary row only; EXPANDED reveals the detailed maneuver
+    row too). mnfv3_arrivalPanel overlays it on arrival.
+-->
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
@@ -8,43 +22,271 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- Turn arrow, instruction text, and distance-to-maneuver. Hidden
-         until options.bannerInstructionsEnabled and a route is active. -->
-    <com.mapbox.navigation.ui.components.maneuver.view.MapboxManeuverView
-        android:id="@+id/mnfv3_maneuverView"
+    <!-- ============ TOP: maneuver + next-maneuver preview + status pills ============ -->
+    <LinearLayout
+        android:id="@+id/mnfv3_topOverlay"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="top"
-        android:layout_margin="16dp"
+        android:orientation="vertical"
+        android:clipToPadding="false"
+        android:padding="@dimen/mnfv3_screen_margin">
+
+        <FrameLayout
+            android:id="@+id/mnfv3_maneuverCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:visibility="gone">
+
+            <com.mapbox.navigation.ui.components.maneuver.view.MapboxManeuverView
+                android:id="@+id/mnfv3_maneuverView"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content" />
+        </FrameLayout>
+
+        <!-- "Then <icon> <text>" - the maneuver AFTER the current one.
+             Built from a lightweight MapboxTurnIconManeuver (Mapbox's own
+             reusable icon-rendering view, same icon set the main banner
+             uses) rather than a full second MapboxManeuverView, since only
+             the icon + a short line of text is wanted here, not the full
+             lane-guidance/shield layout. -->
+        <LinearLayout
+            android:id="@+id/mnfv3_nextManeuverPreview"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingLeft="12dp"
+            android:paddingRight="14dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/mnfv3_nextManeuverThenLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
+                android:text="@string/mnfv3_then"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <com.mapbox.navigation.ui.components.maneuver.view.MapboxTurnIconManeuver
+                android:id="@+id/mnfv3_nextManeuverIcon"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:layout_marginEnd="6dp" />
+
+            <TextView
+                android:id="@+id/mnfv3_nextManeuverText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <!-- Transient "Recalculating route..." indicator - shown only
+             while RerouteState.FetchingRoute is active. Rerouting itself
+             is fully automatic (Mapbox's default RerouteController); this
+             is UI feedback only. -->
+        <TextView
+            android:id="@+id/mnfv3_rerouteView"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:layout_gravity="center_horizontal"
+            android:paddingLeft="16dp"
+            android:paddingTop="8dp"
+            android:paddingRight="16dp"
+            android:paddingBottom="8dp"
+            android:text="@string/mnfv3_recalculating_route"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
+        <!-- Subtle "waiting for GPS" indicator - shown only when no fresh
+             location update has arrived for a while (see
+             NavigationActivity's location watchdog). Never fabricates
+             movement; just tells the driver location is stale. -->
+        <TextView
+            android:id="@+id/mnfv3_gpsWarningView"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:layout_gravity="center_horizontal"
+            android:paddingLeft="16dp"
+            android:paddingTop="8dp"
+            android:paddingRight="16dp"
+            android:paddingBottom="8dp"
+            android:text="@string/mnfv3_waiting_for_gps"
+            android:textSize="13sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- ============ Recenter control - shown only when camera is not FOLLOWING ============ -->
+    <ImageButton
+        android:id="@+id/mnfv3_recenterButton"
+        android:layout_width="@dimen/mnfv3_min_touch_target"
+        android:layout_height="@dimen/mnfv3_min_touch_target"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="@dimen/mnfv3_screen_margin"
+        android:layout_marginBottom="140dp"
+        android:background="@android:color/transparent"
+        android:contentDescription="@string/mnfv3_recenter_map"
+        android:padding="12dp"
+        android:src="@drawable/mnfv3_ic_recenter"
         android:visibility="gone" />
 
-    <!-- ETA / distance-remaining / time-remaining bar. Hidden until a
-         route is active. -->
-    <com.mapbox.navigation.ui.components.tripprogress.view.MapboxTripProgressView
-        android:id="@+id/mnfv3_tripProgressView"
+    <!-- ============ BOTTOM: trip summary + detailed maneuver, draggable ============ -->
+    <FrameLayout
+        android:id="@+id/mnfv3_bottomSheet"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
-        android:layout_margin="16dp"
-        android:visibility="gone" />
+        app:layout_behavior="com.google.android.material.bottomsheet.BottomSheetBehavior">
 
-    <!-- Transient "Recalculating route..." indicator, shown only while
-         RerouteState.FetchingRoute is active (the SDK's RerouteController
-         reroutes automatically on its own - this is UI feedback for that,
-         not the rerouting logic itself). -->
-    <TextView
-        android:id="@+id/mnfv3_rerouteView"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top|center_horizontal"
-        android:layout_marginTop="16dp"
-        android:background="#CC000000"
-        android:paddingLeft="16dp"
-        android:paddingTop="8dp"
-        android:paddingRight="16dp"
-        android:paddingBottom="8dp"
-        android:text="@string/mnfv3_recalculating_route"
-        android:textColor="#FFFFFF"
-        android:visibility="gone" />
+        <LinearLayout
+            android:id="@+id/mnfv3_bottomSheetContent"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingLeft="@dimen/mnfv3_content_padding"
+            android:paddingRight="@dimen/mnfv3_content_padding"
+            android:paddingBottom="@dimen/mnfv3_content_padding">
 
-</FrameLayout>
+            <View
+                android:id="@+id/mnfv3_sheetHandle"
+                android:layout_width="36dp"
+                android:layout_height="4dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="12dp"
+                android:layout_gravity="center_horizontal"
+                android:background="@drawable/mnfv3_bg_sheet_handle"
+                android:importantForAccessibility="no" />
+
+            <!-- Trip summary row: stop | large duration + distance-bull-eta | action -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <ImageButton
+                    android:id="@+id/mnfv3_stopButton"
+                    android:layout_width="@dimen/mnfv3_min_touch_target"
+                    android:layout_height="@dimen/mnfv3_min_touch_target"
+                    android:background="@android:color/transparent"
+                    android:contentDescription="@string/mnfv3_stop_navigation"
+                    android:padding="12dp"
+                    android:src="@drawable/mnfv3_ic_stop" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="4dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/mnfv3_remainingDurationText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textSize="28sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/mnfv3_distanceAndArrivalText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:textSize="14sp" />
+                </LinearLayout>
+
+                <ImageButton
+                    android:id="@+id/mnfv3_tripActionButton"
+                    android:layout_width="@dimen/mnfv3_min_touch_target"
+                    android:layout_height="@dimen/mnfv3_min_touch_target"
+                    android:background="@android:color/transparent"
+                    android:contentDescription="@string/mnfv3_show_route_overview"
+                    android:padding="12dp"
+                    android:src="@drawable/mnfv3_ic_overview" />
+            </LinearLayout>
+
+            <View
+                android:id="@+id/mnfv3_sheetDivider"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp" />
+
+            <!-- Detailed maneuver row: icon | instruction, distance beneath -->
+            <LinearLayout
+                android:id="@+id/mnfv3_detailedManeuverRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <com.mapbox.navigation.ui.components.maneuver.view.MapboxTurnIconManeuver
+                    android:id="@+id/mnfv3_detailedManeuverIcon"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:layout_marginEnd="12dp" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/mnfv3_detailedManeuverText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:maxLines="2"
+                        android:ellipsize="end"
+                        android:textSize="16sp"
+                        android:textStyle="normal" />
+
+                    <TextView
+                        android:id="@+id/mnfv3_detailedManeuverDistanceText"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:textSize="13sp" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Arrival state - swapped in over the sheet content when the
+             destination is reached; sheet content above is hidden while
+             this is visible. -->
+        <LinearLayout
+            android:id="@+id/mnfv3_arrivalPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingLeft="@dimen/mnfv3_content_padding"
+            android:paddingRight="@dimen/mnfv3_content_padding"
+            android:paddingTop="20dp"
+            android:paddingBottom="20dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginEnd="16dp"
+                android:src="@drawable/mnfv3_ic_arrived_check"
+                android:importantForAccessibility="no" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/mnfv3_arrived_title"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </FrameLayout>
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

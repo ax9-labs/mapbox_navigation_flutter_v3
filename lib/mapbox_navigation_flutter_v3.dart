@@ -1,6 +1,15 @@
 import 'mapbox_navigation_flutter_v3_platform_interface.dart';
 
-export 'mapbox_navigation_flutter_v3_platform_interface.dart' show NavigationWaypoint, NavigationOptions, NavigationProfile, NavigationResult, NavigationException, NavigationMarker;
+export 'mapbox_navigation_flutter_v3_platform_interface.dart'
+    show
+        NavigationWaypoint,
+        NavigationOptions,
+        NavigationProfile,
+        NavigationResult,
+        NavigationException,
+        NavigationMarker,
+        TurnByTurnTheme,
+        TurnByTurnUiOptions;
 
 class MapboxNavigationFlutterV3 {
   Future<String?> getPlatformVersion() {

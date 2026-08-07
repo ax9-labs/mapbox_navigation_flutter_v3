@@ -108,6 +108,9 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("com.mapbox.navigationcore:navigation:3.11.6")
     implementation("com.mapbox.navigationcore:ui-components:3.11.6")
+    // CoordinatorLayout + BottomSheetBehavior for the draggable trip sheet.
+    implementation("androidx.coordinatorlayout:coordinatorlayout:1.2.0")
+    implementation("com.google.android.material:material:1.12.0")
 
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.mockito:mockito-core:5.0.0")

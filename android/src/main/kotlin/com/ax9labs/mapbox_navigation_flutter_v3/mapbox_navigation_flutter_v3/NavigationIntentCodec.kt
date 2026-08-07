@@ -14,7 +14,9 @@ internal data class NavigationStartOptions(
     /** How close (meters) `distanceRemaining` must get before arrival fires. Tunable per profile - 25m default suits driving, but is likely too loose for `walking` and too tight on a highway. */
     val arrivalDistanceMeters: Double,
     /** Playback speed multiplier for [NavigationStartOptions.simulateRoute] sessions. Dev/QA convenience only - has no effect on real-GPS sessions. */
-    val simulateSpeedMultiplier: Double
+    val simulateSpeedMultiplier: Double,
+    val theme: TurnByTurnTheme,
+    val uiOptions: TurnByTurnUiOptions
 ) {
     companion object {
         val DEFAULT =
@@ -25,7 +27,9 @@ internal data class NavigationStartOptions(
                 bannerInstructionsEnabled = true,
                 simulateRoute = false,
                 arrivalDistanceMeters = 25.0,
-                simulateSpeedMultiplier = 3.0
+                simulateSpeedMultiplier = 3.0,
+                theme = TurnByTurnTheme.DEFAULT,
+                uiOptions = TurnByTurnUiOptions.DEFAULT
             )
     }
 }
@@ -89,7 +93,9 @@ internal object NavigationIntentCodec {
                 bannerInstructionsEnabled = obj.optBoolean("bannerInstructionsEnabled", defaults.bannerInstructionsEnabled),
                 simulateRoute = obj.optBoolean("simulateRoute", defaults.simulateRoute),
                 arrivalDistanceMeters = obj.optDouble("arrivalDistanceMeters", defaults.arrivalDistanceMeters),
-                simulateSpeedMultiplier = obj.optDouble("simulateSpeedMultiplier", defaults.simulateSpeedMultiplier)
+                simulateSpeedMultiplier = obj.optDouble("simulateSpeedMultiplier", defaults.simulateSpeedMultiplier),
+                theme = TurnByTurnTheme.decode(obj.optJSONObject("theme")),
+                uiOptions = TurnByTurnUiOptions.decode(obj.optJSONObject("uiOptions"))
             )
         }.getOrElse {
             Log.w(TAG, "Failed to decode options JSON, falling back to defaults: ${it.message}")
