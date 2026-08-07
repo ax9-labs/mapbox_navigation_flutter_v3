@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  package="com.ax9labs.mapbox_navigation_flutter_v3.mapbox_navigation_flutter_v3">
+
+    <application>
+        <activity
+            android:name=".NavigationActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
+    </application>
+</manifest>
