@@ -107,9 +107,15 @@ class MapboxNavigationFlutterV3Plugin :
     ): Boolean {
         if (requestCode != NAVIGATION_REQUEST_CODE) return false
 
-        val outcome = data?.getStringExtra(NavigationActivity.EXTRA_RESULT) ?: "error"
+        val outcome = data?.getStringExtra(NavigationActivity.EXTRA_RESULT) ?: NavigationActivity.RESULT_ERROR
         Log.d(TAG, "Navigation session finished: $outcome")
-        pendingResult?.success(outcome)
+        if (outcome == NavigationActivity.RESULT_ERROR) {
+            val code = data?.getStringExtra(NavigationActivity.EXTRA_ERROR_CODE) ?: "NAVIGATION_ERROR"
+            val message = data?.getStringExtra(NavigationActivity.EXTRA_ERROR_MESSAGE)
+            pendingResult?.error(code, message, null)
+        } else {
+            pendingResult?.success(outcome)
+        }
         pendingResult = null
         return true
     }

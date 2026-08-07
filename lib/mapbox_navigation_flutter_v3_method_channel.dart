@@ -43,9 +43,18 @@ class MethodChannelMapboxNavigationFlutterV3 extends MapboxNavigationFlutterV3Pl
           'markers': markers.map((m) => m.toJson()).toList(),
         },
       );
+      // A failure mid-route arrives as a PlatformException (caught below),
+      // same as a start-time failure - the native side only ever returns
+      // "arrived" or "cancelled" as a plain success value now. An
+      // unrecognized code here would mean a native/Dart version mismatch;
+      // surfacing it as an exception is more honest than silently treating
+      // it as some arbitrary enum value.
       return NavigationResult.values.firstWhere(
         (r) => r.name == resultCode,
-        orElse: () => NavigationResult.error,
+        orElse: () => throw NavigationException(
+          'UNEXPECTED_RESULT',
+          'Unrecognized navigation result code: $resultCode',
+        ),
       );
     } on PlatformException catch (e) {
       throw NavigationException(e.code, e.message);

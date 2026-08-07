@@ -1,8 +1,10 @@
 package com.ax9labs.mapbox_navigation_flutter_v3.mapbox_navigation_flutter_v3
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -10,7 +12,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.widget.TextView
+import androidx.activity.addCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import com.mapbox.api.directions.v5.models.RouteOptions
 import com.mapbox.common.MapboxOptions
@@ -39,6 +44,8 @@ import com.mapbox.navigation.core.lifecycle.MapboxNavigationObserver
 import com.mapbox.navigation.core.lifecycle.requireMapboxNavigation
 import com.mapbox.navigation.core.replay.route.ReplayProgressObserver
 import com.mapbox.navigation.core.replay.route.ReplayRouteMapper
+import com.mapbox.navigation.core.reroute.RerouteController
+import com.mapbox.navigation.core.reroute.RerouteState
 import com.mapbox.navigation.core.trip.session.LocationMatcherResult
 import com.mapbox.navigation.core.trip.session.LocationObserver
 import com.mapbox.navigation.core.trip.session.RouteProgressObserver
@@ -83,6 +90,7 @@ class NavigationActivity : AppCompatActivity() {
     private lateinit var mapView: MapView
     private lateinit var maneuverView: MapboxManeuverView
     private lateinit var tripProgressView: MapboxTripProgressView
+    private lateinit var rerouteView: TextView
     private lateinit var viewportDataSource: MapboxNavigationViewportDataSource
     private lateinit var navigationCamera: NavigationCamera
     private lateinit var routeLineApi: MapboxRouteLineApi
@@ -180,6 +188,26 @@ class NavigationActivity : AppCompatActivity() {
             }
         }
 
+    /**
+     * Rerouting itself is fully automatic - `MapboxNavigation`'s default
+     * [com.mapbox.navigation.core.reroute.RerouteController] detects
+     * off-route driving and requests+applies a new route on its own
+     * (confirmed against Mapbox's own `TurnByTurnExperienceActivity`
+     * example, whose `routesObserver` doc comment notes it fires for "a
+     * reroute was executed" with no separate reroute-triggering code
+     * anywhere in that example). This observer only adds the UI feedback
+     * for that already-automatic process - a brief "Recalculating
+     * route..." indicator - so the driver isn't looking at a stale route
+     * line with no explanation for the few seconds a reroute takes.
+     */
+    private val rerouteStateObserver =
+        RerouteController.RerouteStateObserver { state ->
+            rerouteView.isVisible = state is RerouteState.FetchingRoute
+            if (state is RerouteState.Failed) {
+                Log.w(TAG, "Reroute failed: ${state.message}")
+            }
+        }
+
     private val routesObserver =
         RoutesObserver { routeUpdateResult ->
             if (routeUpdateResult.navigationRoutes.isNotEmpty()) {
@@ -216,6 +244,7 @@ class NavigationActivity : AppCompatActivity() {
                     if (startOptions.voiceInstructionsEnabled) {
                         mapboxNavigation.registerVoiceInstructionsObserver(voiceInstructionsObserver)
                     }
+                    mapboxNavigation.getRerouteController()?.registerRerouteStateObserver(rerouteStateObserver)
                     requestRoute(mapboxNavigation)
                 }
 
@@ -226,6 +255,7 @@ class NavigationActivity : AppCompatActivity() {
                     if (startOptions.voiceInstructionsEnabled) {
                         mapboxNavigation.unregisterVoiceInstructionsObserver(voiceInstructionsObserver)
                     }
+                    mapboxNavigation.getRerouteController()?.unregisterRerouteStateObserver(rerouteStateObserver)
                 }
             },
         onInitialize = this::initNavigation
@@ -238,8 +268,25 @@ class NavigationActivity : AppCompatActivity() {
         val accessToken = MapboxAccessToken.value
         val parsedWaypoints = NavigationIntentCodec.decodeWaypoints(intent.getStringExtra(EXTRA_WAYPOINTS))
         if (accessToken == null || parsedWaypoints.isEmpty()) {
-            Log.e(TAG, "Cannot start navigation: accessToken=${accessToken != null}, waypoints=${parsedWaypoints.size}")
-            setResult(RESULT_OK, Intent().putExtra(EXTRA_RESULT, RESULT_ERROR))
+            val code = if (accessToken == null) "NOT_INITIALIZED" else "NO_WAYPOINTS"
+            val message =
+                if (accessToken == null) {
+                    "Mapbox access token not set - call initialize() before startNavigation()"
+                } else {
+                    // The Plugin already rejects an empty waypoints list before
+                    // launching this Activity (NO_WAYPOINTS), so reaching this
+                    // branch means waypoints were provided but all failed to
+                    // decode - see NavigationIntentCodec.decodeWaypoints.
+                    "No valid waypoints could be decoded from the launch Intent"
+                }
+            Log.e(TAG, "Cannot start navigation ($code): $message")
+            setResult(
+                RESULT_OK,
+                Intent()
+                    .putExtra(EXTRA_RESULT, RESULT_ERROR)
+                    .putExtra(EXTRA_ERROR_CODE, code)
+                    .putExtra(EXTRA_ERROR_MESSAGE, message)
+            )
             finish()
             return
         }
@@ -254,6 +301,7 @@ class NavigationActivity : AppCompatActivity() {
         mapView = findViewById(R.id.mnfv3_mapView)
         maneuverView = findViewById(R.id.mnfv3_maneuverView)
         tripProgressView = findViewById(R.id.mnfv3_tripProgressView)
+        rerouteView = findViewById(R.id.mnfv3_rerouteView)
 
         val mapboxMap = mapView.mapboxMap
         viewportDataSource = MapboxNavigationViewportDataSource(mapboxMap)
@@ -290,6 +338,20 @@ class NavigationActivity : AppCompatActivity() {
 
         mapboxMap.loadStyle(Style.MAPBOX_STREETS) {
             renderMarkers()
+        }
+
+        // NOT `override fun onBackPressed()` - found by running this on a
+        // real emulator (predictive-back-gesture Android build): with
+        // predictive back enabled, the system routes back navigation
+        // through OnBackInvokedCallback/OnBackPressedDispatcher and the
+        // deprecated onBackPressed() override is never invoked at all, so
+        // the Activity finished via the default system behavior (no
+        // setResult() call), which the plugin then defaulted to
+        // RESULT_ERROR instead of RESULT_CANCELLED. This is the
+        // AndroidX-recommended replacement, compatible with both gesture
+        // and legacy back navigation.
+        onBackPressedDispatcher.addCallback(this) {
+            finishWithResult(RESULT_CANCELLED)
         }
     }
 
@@ -338,6 +400,12 @@ class NavigationActivity : AppCompatActivity() {
         Log.d(TAG, "Rendered ${markers.size} marker(s)")
     }
 
+    private fun hasLocationPermission(): Boolean {
+        val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+        val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
+        return fine == PackageManager.PERMISSION_GRANTED || coarse == PackageManager.PERMISSION_GRANTED
+    }
+
     /**
      * The Dart API promises navigation "from the device's current location
      * through waypoints" - callers only pass the destination(s), not an
@@ -352,12 +420,25 @@ class NavigationActivity : AppCompatActivity() {
      * known" and used as the route origin, silently producing a wrong (or
      * trivially-already-arrived) route. A real navigation session should
      * not silently trust a fix that could be minutes or hours old.
+     *
+     * @param onResult Called with the resolved origin, or `null` plus a
+     *   specific error code (`ERROR_LOCATION_PERMISSION_DENIED`,
+     *   `ERROR_LOCATION_PROVIDER_DISABLED`, `ERROR_LOCATION_UNAVAILABLE`)
+     *   when one can't be resolved - explicit permission checking here
+     *   (rather than relying on `@SuppressLint("MissingPermission")` to
+     *   paper over a potential `SecurityException`) means a missing
+     *   permission surfaces as a clear, distinguishable
+     *   [NavigationException] instead of an ambiguous generic failure.
      */
-    @SuppressLint("MissingPermission")
-    private fun resolveOrigin(onResult: (Point?) -> Unit) {
+    private fun resolveOrigin(onResult: (Point?, String?) -> Unit) {
+        if (!hasLocationPermission()) {
+            onResult(null, ERROR_LOCATION_PERMISSION_DENIED)
+            return
+        }
+
         val locationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         if (locationManager == null) {
-            onResult(lastKnownLocationPoint(null))
+            onResult(lastKnownLocationPoint(null), ERROR_LOCATION_UNAVAILABLE)
             return
         }
         val provider =
@@ -368,20 +449,22 @@ class NavigationActivity : AppCompatActivity() {
             }
         if (provider == null) {
             Log.w(TAG, "No enabled location provider; falling back to last-known-location cache")
-            onResult(lastKnownLocationPoint(locationManager))
+            val cached = lastKnownLocationPoint(locationManager)
+            onResult(cached, if (cached == null) ERROR_LOCATION_PROVIDER_DISABLED else null)
             return
         }
 
         var resolved = false
         val listener =
             object : LocationListener {
+                @SuppressLint("MissingPermission")
                 override fun onLocationChanged(location: Location) {
                     if (resolved) return
                     resolved = true
                     mainHandler.removeCallbacksAndMessages(TIMEOUT_TOKEN)
                     locationManager.removeUpdates(this)
                     Log.d(TAG, "Resolved fresh origin from $provider")
-                    onResult(Point.fromLngLat(location.longitude, location.latitude))
+                    onResult(Point.fromLngLat(location.longitude, location.latitude), null)
                 }
             }
 
@@ -391,23 +474,29 @@ class NavigationActivity : AppCompatActivity() {
                 resolved = true
                 locationManager.removeUpdates(listener)
                 Log.w(TAG, "Fresh location request timed out after ${LOCATION_TIMEOUT_MS}ms; falling back to last-known-location cache")
-                onResult(lastKnownLocationPoint(locationManager))
+                val cached = lastKnownLocationPoint(locationManager)
+                onResult(cached, if (cached == null) ERROR_LOCATION_UNAVAILABLE else null)
             },
             TIMEOUT_TOKEN,
             android.os.SystemClock.uptimeMillis() + LOCATION_TIMEOUT_MS
         )
 
-        runCatching {
-            locationManager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
-        }.onFailure {
+        @SuppressLint("MissingPermission") // hasLocationPermission() checked above
+        val requestResult =
+            runCatching {
+                locationManager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+            }
+        requestResult.onFailure {
             resolved = true
             mainHandler.removeCallbacksAndMessages(TIMEOUT_TOKEN)
             Log.w(TAG, "requestSingleUpdate failed, falling back to last-known-location cache: ${it.message}")
-            onResult(lastKnownLocationPoint(locationManager))
+            val cached = lastKnownLocationPoint(locationManager)
+            onResult(cached, if (cached == null) ERROR_LOCATION_UNAVAILABLE else null)
         }
     }
 
     /** Fallback only - see [resolveOrigin] for why a fresh fix is preferred. */
+    @SuppressLint("MissingPermission") // callers only reach here after hasLocationPermission() passed
     private fun lastKnownLocationPoint(locationManager: LocationManager?): Point? {
         val manager = locationManager ?: (getSystemService(Context.LOCATION_SERVICE) as? LocationManager) ?: return null
         return manager.allProviders
@@ -417,15 +506,25 @@ class NavigationActivity : AppCompatActivity() {
     }
 
     private fun requestRoute(mapboxNavigation: MapboxNavigation) {
-        resolveOrigin { origin ->
+        resolveOrigin { origin, errorCode ->
             if (origin == null) {
-                Log.e(TAG, "No location available to use as route origin")
-                finishWithResult(RESULT_ERROR)
+                val code = errorCode ?: ERROR_LOCATION_UNAVAILABLE
+                Log.e(TAG, "No location available to use as route origin ($code)")
+                finishWithResult(RESULT_ERROR, code, locationErrorMessage(code))
                 return@resolveOrigin
             }
             requestRouteFromOrigin(mapboxNavigation, origin)
         }
     }
+
+    private fun locationErrorMessage(code: String): String =
+        when (code) {
+            ERROR_LOCATION_PERMISSION_DENIED ->
+                "Location permission not granted - request ACCESS_FINE_LOCATION or " +
+                    "ACCESS_COARSE_LOCATION before calling startNavigation()"
+            ERROR_LOCATION_PROVIDER_DISABLED -> "No enabled location provider (GPS and network location are both off)"
+            else -> "No location available to use as the route origin"
+        }
 
     private fun requestRouteFromOrigin(
         mapboxNavigation: MapboxNavigation,
@@ -462,8 +561,9 @@ class NavigationActivity : AppCompatActivity() {
                     reasons: List<RouterFailure>,
                     routeOptions: RouteOptions
                 ) {
-                    Log.e(TAG, "Route request failed: ${reasons.joinToString { it.message }}")
-                    finishWithResult(RESULT_ERROR)
+                    val message = reasons.joinToString { it.message }.ifEmpty { "no route found" }
+                    Log.e(TAG, "Route request failed: $message")
+                    finishWithResult(RESULT_ERROR, "ROUTE_REQUEST_FAILED", message)
                 }
 
                 override fun onCanceled(
@@ -471,7 +571,7 @@ class NavigationActivity : AppCompatActivity() {
                     routerOrigin: String
                 ) {
                     Log.w(TAG, "Route request canceled (routerOrigin=$routerOrigin)")
-                    finishWithResult(RESULT_ERROR)
+                    finishWithResult(RESULT_ERROR, "ROUTE_REQUEST_CANCELED", "Route request canceled (routerOrigin=$routerOrigin)")
                 }
             }
         )
@@ -504,11 +604,6 @@ class NavigationActivity : AppCompatActivity() {
         }
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        finishWithResult(RESULT_CANCELLED)
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         mainHandler.removeCallbacksAndMessages(TIMEOUT_TOKEN)
@@ -528,10 +623,19 @@ class NavigationActivity : AppCompatActivity() {
         }
     }
 
-    private fun finishWithResult(result: String) {
+    private fun finishWithResult(
+        result: String,
+        errorCode: String? = null,
+        errorMessage: String? = null
+    ) {
         if (finishedWithResult) return
         finishedWithResult = true
-        setResult(RESULT_OK, Intent().putExtra(EXTRA_RESULT, result))
+        val data =
+            Intent().putExtra(EXTRA_RESULT, result).apply {
+                if (errorCode != null) putExtra(EXTRA_ERROR_CODE, errorCode)
+                if (errorMessage != null) putExtra(EXTRA_ERROR_MESSAGE, errorMessage)
+            }
+        setResult(RESULT_OK, data)
         finish()
     }
 
@@ -539,12 +643,18 @@ class NavigationActivity : AppCompatActivity() {
         private const val TAG = "NavigationActivity"
 
         const val EXTRA_RESULT = "com.ax9labs.mapbox_navigation_flutter_v3.RESULT"
+        const val EXTRA_ERROR_CODE = "com.ax9labs.mapbox_navigation_flutter_v3.ERROR_CODE"
+        const val EXTRA_ERROR_MESSAGE = "com.ax9labs.mapbox_navigation_flutter_v3.ERROR_MESSAGE"
         private const val EXTRA_WAYPOINTS = "com.ax9labs.mapbox_navigation_flutter_v3.WAYPOINTS"
         private const val EXTRA_OPTIONS = "com.ax9labs.mapbox_navigation_flutter_v3.OPTIONS"
 
         const val RESULT_ARRIVED = "arrived"
         const val RESULT_CANCELLED = "cancelled"
         const val RESULT_ERROR = "error"
+
+        const val ERROR_LOCATION_PERMISSION_DENIED = "LOCATION_PERMISSION_DENIED"
+        const val ERROR_LOCATION_PROVIDER_DISABLED = "LOCATION_PROVIDER_DISABLED"
+        const val ERROR_LOCATION_UNAVAILABLE = "LOCATION_UNAVAILABLE"
 
         private const val LOCATION_TIMEOUT_MS = 5_000L
         private const val TIMEOUT_TOKEN = "resolve-origin-timeout"

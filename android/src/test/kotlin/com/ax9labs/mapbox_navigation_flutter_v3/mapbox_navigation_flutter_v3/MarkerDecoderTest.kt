@@ -9,19 +9,20 @@ import kotlin.test.assertTrue
 /**
  * Exercises [MarkerDecoder]'s field validation, size caps, and
  * error-swallowing behavior by injecting a fake `decodeIcon` step instead
- * of the real `android.util.Base64`/`android.graphics.BitmapFactory` path
- * - those two are unavailable (stubbed to throw) in a plain
- * `testDebugUnitTest` run without Robolectric. See the `decodeIcon`
- * parameter on [MarkerDecoder.decodeMarkers].
+ * of the real `android.graphics.BitmapFactory` path - that's unavailable
+ * (stubbed to throw) in a plain `testDebugUnitTest` run without
+ * Robolectric. See the `decodeIcon` parameter on
+ * [MarkerDecoder.decodeMarkers].
  */
 internal class MarkerDecoderTest {
     private val fakeBitmap: Bitmap = Mockito.mock(Bitmap::class.java)
+    private val defaultIcon = byteArrayOf(1, 2, 3)
 
     private fun marker(
         id: Any? = "m1",
         latitude: Any? = 1.0,
         longitude: Any? = 2.0,
-        icon: Any? = "base64-icon",
+        icon: Any? = defaultIcon,
         iconScale: Any? = null
     ): Map<String, Any?> =
         buildMap {
@@ -67,6 +68,14 @@ internal class MarkerDecoderTest {
     }
 
     @Test
+    fun decodeMarkers_nonByteArrayIcon_isDropped() {
+        // e.g. if the Dart side ever sent a base64 String by mistake -
+        // should be dropped like any other malformed field, not crash with
+        // a ClassCastException.
+        assertTrue(MarkerDecoder.decodeMarkers(listOf(marker(icon = "not-bytes")), decodeIcon = { fakeBitmap }).isEmpty())
+    }
+
+    @Test
     fun decodeMarkers_decodeIconReturnsNull_isDropped() {
         assertTrue(MarkerDecoder.decodeMarkers(listOf(marker()), decodeIcon = { null }).isEmpty())
     }
@@ -76,12 +85,12 @@ internal class MarkerDecoderTest {
         val markers = listOf(marker(id = "bad"), marker(id = "good"))
 
         val result =
-            MarkerDecoder.decodeMarkers(markers) { base64 ->
-                if (base64 == "base64-icon") fakeBitmap else error("boom")
+            MarkerDecoder.decodeMarkers(markers) { bytes ->
+                if (bytes.contentEquals(defaultIcon)) fakeBitmap else error("boom")
             }
 
-        // Both markers share the same "base64-icon" icon in this fixture,
-        // so what's actually being exercised here is that a throwing
+        // Both markers share the same icon bytes in this fixture, so
+        // what's actually being exercised here is that a throwing
         // decodeIcon for one marker doesn't take down the whole batch -
         // see the dedicated oversized-icon test below for a case that
         // legitimately differs per marker.
@@ -98,8 +107,8 @@ internal class MarkerDecoderTest {
     }
 
     @Test
-    fun decodeMarkers_iconBase64LengthOverCap_isDroppedWithoutInvokingDecodeIcon() {
-        val oversized = "a".repeat(MarkerDecoder.MAX_ICON_BYTES * 2)
+    fun decodeMarkers_iconBytesOverCap_isDroppedWithoutInvokingDecodeIcon() {
+        val oversized = ByteArray(MarkerDecoder.MAX_ICON_BYTES + 1)
         var decodeIconCalled = false
 
         val result =
@@ -109,7 +118,7 @@ internal class MarkerDecoderTest {
             }
 
         assertTrue(result.isEmpty())
-        assertTrue(!decodeIconCalled, "decodeIcon should not run for a payload that already fails the cheap length check")
+        assertTrue(!decodeIconCalled, "decodeIcon should not run for a payload that already fails the cheap size check")
     }
 
     @Test

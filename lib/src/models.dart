@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:typed_data';
 
 /// A single stop along a navigation route. The last waypoint in the list
@@ -56,11 +55,16 @@ class NavigationMarker {
   final Uint8List icon;
   final double iconScale;
 
+  // [icon] crosses the platform channel as-is (not base64-encoded): the
+  // Flutter StandardMessageCodec natively supports Uint8List as a first-class
+  // binary type, arriving as a plain ByteArray on the Kotlin side - base64
+  // would only add ~33% size overhead and an encode/decode step for no
+  // benefit here.
   Map<String, Object?> toJson() => {
         'id': id,
         'latitude': latitude,
         'longitude': longitude,
-        'icon': base64Encode(icon),
+        'icon': icon,
         'iconScale': iconScale,
       };
 }
@@ -122,25 +126,30 @@ class NavigationOptions {
       };
 }
 
-/// Outcome of a [MapboxNavigationFlutterV3.startNavigation] call.
+/// Outcome of a [MapboxNavigationFlutterV3.startNavigation] call that
+/// actually ran to some conclusion. Any failure - couldn't start at all,
+/// or failed partway through (no route found, location unavailable,
+/// native SDK error) - is instead thrown as [NavigationException]; there
+/// is deliberately no `NavigationResult.error` value, so callers only
+/// need to branch on this enum for genuine outcomes and use try/catch for
+/// everything that went wrong. See [NavigationException] for the
+/// distinguishing error codes.
 enum NavigationResult {
   /// The user reached the final waypoint.
   arrived,
 
   /// The user backed out of the native navigation screen before arriving.
   cancelled,
-
-  /// Navigation could not start or failed mid-route (no route found, no
-  /// location permission, native SDK error, etc). See
-  /// [NavigationException] for the specific cause when this is thrown
-  /// instead of returned.
-  error,
 }
 
-/// Thrown by [MapboxNavigationFlutterV3.startNavigation] when navigation
-/// could not be started at all (as opposed to [NavigationResult.error],
-/// which can also represent a failure - platform channel errors surface
-/// as this exception, everything else as a result value).
+/// Thrown by [MapboxNavigationFlutterV3.startNavigation] for any failure -
+/// whether navigation couldn't start at all (e.g. missing location
+/// permission, no access token configured) or failed partway through
+/// (e.g. no route found, location became unavailable). [code] is a
+/// stable, switchable identifier (e.g. `"NO_WAYPOINTS"`,
+/// `"LOCATION_UNAVAILABLE"`, `"ROUTE_REQUEST_FAILED"`); [message] is a
+/// human-readable detail for logging, not guaranteed stable across SDK
+/// versions.
 class NavigationException implements Exception {
   NavigationException(this.code, this.message);
 

@@ -2,7 +2,6 @@ package com.ax9labs.mapbox_navigation_flutter_v3.mapbox_navigation_flutter_v3
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.util.Base64
 import android.util.Log
 import com.mapbox.geojson.Point
 
@@ -15,8 +14,10 @@ internal data class NavigationMarkerData(
 
 /**
  * Decodes marker payloads coming from the Dart `startNavigation(markers:
- * ...)` call (base64-encoded PNG bytes) into ready-to-render
- * [NavigationMarkerData].
+ * ...)` call (PNG-encoded bytes, delivered as a native `ByteArray` -
+ * Flutter's `StandardMessageCodec` supports `Uint8List` as a first-class
+ * binary type, so no base64 round-trip is needed on either side) into
+ * ready-to-render [NavigationMarkerData].
  *
  * Deliberately generous rather than strict: a single malformed or
  * oversized marker is dropped (logged, not thrown) instead of failing the
@@ -42,17 +43,17 @@ internal object MarkerDecoder {
     const val MAX_MARKERS = 300
 
     /**
-     * @param decodeIcon Decodes a base64 icon string to a bitmap, or
-     *   `null`/throws if it can't. Defaults to the real Android
-     *   Base64+BitmapFactory path ([decodeIconBase64]); overridable so the
-     *   field-validation/cap/error-handling logic in [decodeMarker] can be
-     *   unit-tested on the plain JVM without Robolectric - `android.util.Base64`
-     *   and `android.graphics.BitmapFactory` are unavailable (stubbed to
-     *   throw) in a standard `testDebugUnitTest` run.
+     * @param decodeIcon Decodes raw icon bytes to a bitmap, or
+     *   `null`/throws if it can't. Defaults to the real
+     *   `android.graphics.BitmapFactory` path ([decodeArgb8888Bitmap]);
+     *   overridable so the field-validation/cap/error-handling logic in
+     *   [decodeMarker] can be unit-tested on the plain JVM without
+     *   Robolectric - `BitmapFactory` is unavailable (stubbed to throw) in
+     *   a standard `testDebugUnitTest` run.
      */
     fun decodeMarkers(
         rawMarkers: List<Map<String, Any?>>,
-        decodeIcon: (String) -> Bitmap? = ::decodeIconBase64
+        decodeIcon: (ByteArray) -> Bitmap? = ::decodeArgb8888Bitmap
     ): List<NavigationMarkerData> {
         if (rawMarkers.size > MAX_MARKERS) {
             Log.w(TAG, "Dropping ${rawMarkers.size - MAX_MARKERS} marker(s) past the $MAX_MARKERS cap")
@@ -62,23 +63,20 @@ internal object MarkerDecoder {
 
     private fun decodeMarker(
         raw: Map<String, Any?>,
-        decodeIcon: (String) -> Bitmap?
+        decodeIcon: (ByteArray) -> Bitmap?
     ): NavigationMarkerData? {
         val id = raw["id"] as? String ?: return dropped("marker missing id")
         val latitude = (raw["latitude"] as? Number)?.toDouble() ?: return dropped("marker $id missing latitude")
         val longitude = (raw["longitude"] as? Number)?.toDouble() ?: return dropped("marker $id missing longitude")
-        val iconBase64 = raw["icon"] as? String ?: return dropped("marker $id missing icon")
+        val iconBytes = raw["icon"] as? ByteArray ?: return dropped("marker $id missing icon")
         val iconScale = (raw["iconScale"] as? Number)?.toDouble() ?: 1.0
 
-        // Cheap length check before spending time decoding base64 for an
-        // obviously-oversized payload (base64 is ~4/3 the size of the
-        // decoded bytes).
-        if (iconBase64.length > MAX_ICON_BYTES * 4 / 3) {
-            return dropped("marker $id icon exceeds the $MAX_ICON_BYTES byte cap")
+        if (iconBytes.size > MAX_ICON_BYTES) {
+            return dropped("marker $id icon (${iconBytes.size} bytes) exceeds the $MAX_ICON_BYTES byte cap")
         }
 
         val bitmap =
-            runCatching { decodeIcon(iconBase64) }
+            runCatching { decodeIcon(iconBytes) }
                 .getOrElse { return dropped("marker $id icon could not be decoded: ${it.message}") }
                 ?: return dropped("marker $id icon bytes are not a decodable image")
 
@@ -88,15 +86,6 @@ internal object MarkerDecoder {
             bitmap = bitmap,
             iconScale = iconScale
         )
-    }
-
-    private fun decodeIconBase64(base64: String): Bitmap? {
-        val bytes = Base64.decode(base64, Base64.DEFAULT)
-        if (bytes.size > MAX_ICON_BYTES) {
-            Log.w(TAG, "icon (${bytes.size} bytes) exceeds the $MAX_ICON_BYTES byte cap after decoding")
-            return null
-        }
-        return decodeArgb8888Bitmap(bytes)
     }
 
     /**

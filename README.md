@@ -6,6 +6,14 @@ Full-screen turn-by-turn navigation for Flutter, built directly on
 `flutter_mapbox_navigation` (unmaintained, breaks on Android 14/15) with a
 package this org actually maintains.
 
+[![CI](https://github.com/ax9-labs/mapbox_navigation_flutter_v3/actions/workflows/ci.yml/badge.svg)](https://github.com/ax9-labs/mapbox_navigation_flutter_v3/actions/workflows/ci.yml)
+
+CI runs `flutter analyze`/`flutter test` unconditionally, plus the Android
+native unit tests (`testDebugUnitTest`) — the Android job needs a repo
+secret `MAPBOX_DOWNLOADS_TOKEN` (Settings → Secrets and variables →
+Actions) with the `DOWNLOADS:READ` scope described below, or it fails at
+Gradle dependency resolution rather than at the tests themselves.
+
 ## Status (honest, as of the first real device/emulator test)
 
 - **Dart API**: real, tested, stable — `initialize()`, `startNavigation()`,
@@ -24,10 +32,10 @@ package this org actually maintains.
   - Cancel (back-press mid-navigation) → `RESULT_CANCELLED`, confirmed.
   - Malformed input (missing origin) → fails closed with `RESULT_ERROR`
     instead of crashing, confirmed.
-  Four real bugs were found and fixed only by actually running it (see
+  Nine real bugs were found and fixed only by actually running it (see
   Fixed section below) — the compiler alone did not catch any of them.
-  **Turn-by-turn guidance and custom markers are now built and verified
-  running** (not just compiled):
+  **Turn-by-turn guidance, custom markers, and automatic reroute feedback
+  are built and verified running** (not just compiled):
   - Trip progress bar (`MapboxTripProgressApi`/`MapboxTripProgressView`):
     confirmed rendering live distance/ETA/time-remaining data during an
     actual navigation session (screenshot showed `< 1 min` / `5 ft` /
@@ -40,21 +48,29 @@ package this org actually maintains.
     `Disconnected from TTS engine` in logcat), driven by a real
     `voice_instructions=true` directions request.
   - Maneuver banner (`MapboxManeuverApi`/`MapboxManeuverView`, gated by
-    `options.bannerInstructionsEnabled`): wired into the same
-    `RouteProgressObserver` tick as trip progress (which is confirmed
-    live) and ran crash-free across 6+ full navigation sessions; not yet
-    independently caught mid-render in a screenshot (short test routes +
-    3x replay speed made the window hard to hit) — flagged as the one
-    remaining gap in visual confirmation, not a known defect.
-  - Custom markers (`PointAnnotationManager`, base64-encoded PNG icons
-    passed from Dart via `NavigationMarker`): rendering crashed on first
-    run (see Fixed section, bug 5) and has been crash-free across every
-    run since the fix; not yet independently confirmed on-screen for the
-    same screenshot-timing reason as the maneuver banner.
+    `options.bannerInstructionsEnabled`): **visually confirmed** rendering
+    a real turn instruction ("North 32nd Lane, 200 ft" with a right-turn
+    arrow) during an actual reroute, alongside a live trip progress bar —
+    this was previously only confirmed crash-free, not seen rendering.
+  - Custom markers (`PointAnnotationManager`, raw PNG bytes passed from
+    Dart via `NavigationMarker`): rendering crashed on first run (see
+    Fixed section) and has been crash-free across every run since the
+    fix; still not independently caught on-screen in a screenshot (the
+    marker's map position hasn't lined up with the camera framing during
+    a capture yet) — the one remaining visual-confirmation gap, not a
+    known defect.
+  - Reroute feedback (`RerouteController.RerouteStateObserver`, gated on
+    `RerouteState.FetchingRoute`): triggered a real automatic reroute by
+    deviating off-route on the emulator (Mapbox's own
+    `RerouteController` requested and applied a new route within ~1s,
+    confirmed via `reason=deviation` in the directions request log and
+    the route line updating) — crash-free, though the transient banner
+    itself resolved faster than a screenshot could catch it.
   Also untested: a physical device (only an emulator so far) and a real
   multi-minute drive with actual turn maneuvers along the way (test
   routes were short and mostly straight-line for practical testing
-  reasons).
+  reasons) — see `PHYSICAL_DEVICE_TESTING.md` for the runbook covering
+  what's left.
 - **iOS**: not implemented. `startNavigation` currently returns a
   `NOT_IMPLEMENTED` error rather than hanging silently.
 
@@ -120,6 +136,20 @@ package this org actually maintains.
    scenario custom markers exist for. Fixed by moving markers to a
    same-process in-memory handoff (`PendingNavigationMarkers`) instead;
    see the Architecture section below.
+9. **Cancel (back-press) silently became `RESULT_ERROR` instead of
+   `RESULT_CANCELLED`** — found by re-running the exact scenario the
+   original bug list called "confirmed" working, after unrelated changes
+   elsewhere in this file. `override fun onBackPressed()` is never invoked
+   at all on Android builds with the predictive-back gesture enabled —
+   back navigation instead routes through `OnBackInvokedCallback`, so the
+   Activity finished via the system's default behavior with no
+   `setResult()` call ever made, which the plugin then defaulted to an
+   error. Fixed with `onBackPressedDispatcher.addCallback(this) { ... }`,
+   the AndroidX-recommended replacement that works under both gesture and
+   legacy back navigation. A reminder that "confirmed working" claims in
+   this file are only as good as the last time that exact path was
+   actually re-run — nothing here regression-tests Activity lifecycle
+   behavior (see Follow-up work).
 
 ### Why "composed" instead of a drop-in screen
 
@@ -152,35 +182,41 @@ dependency, so the Android module hasn't been compiled yet.
 final nav = MapboxNavigationFlutterV3();
 await nav.initialize(accessToken: 'pk.your-public-token');
 
-final result = await nav.startNavigation(
-  waypoints: [
-    NavigationWaypoint(latitude: 26.2034, longitude: -98.2300, name: 'Safe Zone'),
-  ],
-  options: const NavigationOptions(
-    profile: NavigationProfile.drivingTraffic,
-    // Both optional - defaults (25m / 3x) suit driving; tighten
-    // arrivalDistanceMeters for NavigationProfile.walking, or raise it for
-    // open-highway driving where GPS drift is larger relative to road width.
-    arrivalDistanceMeters: 25,
-    simulateSpeedMultiplier: 3,
-  ),
-  markers: [
-    NavigationMarker(
-      id: 'incident-1',
-      latitude: 26.21,
-      longitude: -98.23,
-      icon: incidentIconPngBytes, // must be non-empty; ids must be unique
+try {
+  final result = await nav.startNavigation(
+    waypoints: [
+      NavigationWaypoint(latitude: 26.2034, longitude: -98.2300, name: 'Safe Zone'),
+    ],
+    options: const NavigationOptions(
+      profile: NavigationProfile.drivingTraffic,
+      // Both optional - defaults (25m / 3x) suit driving; tighten
+      // arrivalDistanceMeters for NavigationProfile.walking, or raise it for
+      // open-highway driving where GPS drift is larger relative to road width.
+      arrivalDistanceMeters: 25,
+      simulateSpeedMultiplier: 3,
     ),
-  ],
-);
+    markers: [
+      NavigationMarker(
+        id: 'incident-1',
+        latitude: 26.21,
+        longitude: -98.23,
+        icon: incidentIconPngBytes, // must be non-empty; ids must be unique
+      ),
+    ],
+  );
 
-switch (result) {
-  case NavigationResult.arrived:
-    // user reached the destination
-  case NavigationResult.cancelled:
-    // user backed out
-  case NavigationResult.error:
-    // navigation failed to start or errored mid-route
+  switch (result) {
+    case NavigationResult.arrived:
+      // user reached the destination
+    case NavigationResult.cancelled:
+      // user backed out
+  }
+} on NavigationException catch (e) {
+  // Any failure - couldn't start (missing permission, bad token) or
+  // failed mid-route (no route found, location became unavailable) -
+  // arrives here. e.code is a stable identifier (e.g.
+  // "LOCATION_PERMISSION_DENIED", "ROUTE_REQUEST_FAILED", "NO_WAYPOINTS");
+  // e.message is a human-readable detail for logging.
 }
 ```
 
@@ -196,13 +232,14 @@ Robolectric/emulator needed):
   to/from the JSON strings carried as launch-`Intent` extras. Decoding is
   defensive: malformed JSON degrades to an empty list / default options
   (logged) rather than crashing `onCreate()`.
-- **`MarkerDecoder`** — validates and decodes marker payloads (base64 PNG
-  icons) into `NavigationMarkerData`. A single malformed/oversized marker
-  is dropped (logged) rather than failing the whole session; per-icon
-  (`MAX_ICON_BYTES`) and total (`MAX_MARKERS`) caps guard against
-  pathological input. The Base64/`BitmapFactory` step is injectable
-  (`decodeIcon` parameter) specifically so the validation/cap/error-handling
-  logic has real unit test coverage without needing Robolectric.
+- **`MarkerDecoder`** — validates and decodes marker payloads (raw PNG
+  bytes - see below) into `NavigationMarkerData`. A single
+  malformed/oversized marker is dropped (logged) rather than failing the
+  whole session; per-icon (`MAX_ICON_BYTES`) and total (`MAX_MARKERS`)
+  caps guard against pathological input. The `BitmapFactory` decode step
+  is injectable (`decodeIcon` parameter) specifically so the
+  validation/cap/error-handling logic has real unit test coverage without
+  needing Robolectric.
 - **`PendingNavigationMarkers`** — same-process, same-pattern-as-
   `MapboxAccessToken` handoff for decoded marker bitmaps between the
   plugin and the Activity. Markers used to round-trip through the launch
@@ -211,15 +248,51 @@ Robolectric/emulator needed):
   ~1MB total) — since the Activity always launches in the same process,
   there's no need to serialize through the Intent/Binder at all.
 
+### Marker icon transport (no base64)
+
+`NavigationMarker.icon` crosses the platform channel as a plain
+`Uint8List`/`ByteArray`, not a base64 string. Flutter's
+`StandardMessageCodec` supports `Uint8List` as a first-class binary type
+on both sides of the channel — base64 would only add ~33% size overhead
+and an encode/decode step for no benefit. (This is unrelated to the
+Intent-size fix above, which was about the *plugin → Activity* leg, not
+the *Dart → plugin* leg.)
+
+### Error handling
+
+`startNavigation()` only returns `NavigationResult.arrived` or
+`NavigationResult.cancelled` — there is no `NavigationResult.error`.
+Every failure, whether navigation couldn't start at all (missing
+permission, no access token) or failed partway through (no route found,
+location became unavailable, canceled), throws `NavigationException(code,
+message)` instead. `code` is a stable, switchable identifier:
+`NOT_INITIALIZED`, `NO_WAYPOINTS`, `NO_ACTIVITY`, `ALREADY_NAVIGATING`,
+`LOCATION_PERMISSION_DENIED`, `LOCATION_PROVIDER_DISABLED`,
+`LOCATION_UNAVAILABLE`, `ROUTE_REQUEST_FAILED`, `ROUTE_REQUEST_CANCELED`.
+
 ## Follow-up work
 
 - [ ] iOS implementation (`NavigationViewController` equivalent using
       Mapbox Navigation SDK v3 for iOS's standalone components).
-- [ ] Off-route rerouting UI feedback (the SDK reroutes automatically;
-      surfacing a "recalculating..." state to the user is not wired up).
-- [ ] Test on a physical device (only tested on an emulator so far).
-- [ ] Surface a specific failure reason for `NavigationResult.error`
-      (currently logged natively via `Log.e`/`Log.w` but not threaded back
-      to Dart — would need a small, deliberately-non-breaking addition to
-      the result contract).
+- [ ] Physical-device verification — see `PHYSICAL_DEVICE_TESTING.md` for
+      the runbook (background/lock-screen survival, a real multi-turn
+      drive, audio interruption, notification permission UX, marker/
+      maneuver-banner screenshots).
+- [ ] `NavigationActivity` itself (the lifecycle wiring - observer
+      registration, route/trip-session sequencing) has zero automated
+      test coverage; only the pure logic extracted into
+      `NavigationIntentCodec`/`MarkerDecoder` is unit-tested. The three
+      original runtime bugs (lifecycle timing, replay seeding, bitmap
+      config) and the back-press regression all lived in exactly this
+      untested wiring. Robolectric or instrumented (Espresso) tests would
+      close this gap; neither is set up.
+- [ ] Background trip-session continuity beyond what Mapbox's SDK
+      provides automatically (a foreground-service trip notification —
+      manifest permissions/service already merge in from the SDK, no
+      action needed there) has not been verified end to end: does
+      `requireMapboxNavigation`'s Activity-scoped attach/detach
+      correctly survive the Activity pausing (screen lock, backgrounding),
+      or does the whole trip session (not just this plugin's own UI
+      observers) tear down with it? This needs a real device to answer
+      honestly — see the runbook.
 - [ ] Publish to pub.dev once the above is proven out.

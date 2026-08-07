@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mapbox_navigation_flutter_v3/mapbox_navigation_flutter_v3_method_channel.dart';
@@ -113,7 +111,7 @@ void main() {
       expect(args['options'], containsPair('simulateSpeedMultiplier', 1.5));
     });
 
-    test('serializes marker icon bytes as base64', () async {
+    test('forwards marker icon bytes as-is (no base64 encoding)', () async {
       MethodCall? received;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
@@ -141,23 +139,25 @@ void main() {
           'id': 'incident-1',
           'latitude': 26.2,
           'longitude': -98.2,
-          'icon': base64Encode(iconBytes),
+          'icon': iconBytes,
           'iconScale': 1.5,
         },
       ]);
     });
 
-    test('falls back to NavigationResult.error for an unrecognized result code', () async {
+    test('throws NavigationException for an unrecognized result code', () async {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
             return 'something-unexpected';
           });
 
-      final result = await platform.startNavigation(
-        waypoints: const [NavigationWaypoint(latitude: 0, longitude: 0)],
+      expect(
+        () => platform.startNavigation(
+          waypoints: const [NavigationWaypoint(latitude: 0, longitude: 0)],
+        ),
+        throwsA(isA<NavigationException>()
+            .having((e) => e.code, 'code', 'UNEXPECTED_RESULT')),
       );
-
-      expect(result, NavigationResult.error);
     });
 
     test('wraps a PlatformException as NavigationException', () async {

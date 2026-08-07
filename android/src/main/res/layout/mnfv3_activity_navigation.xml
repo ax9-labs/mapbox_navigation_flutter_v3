@@ -28,4 +28,23 @@
         android:layout_margin="16dp"
         android:visibility="gone" />
 
+    <!-- Transient "Recalculating route..." indicator, shown only while
+         RerouteState.FetchingRoute is active (the SDK's RerouteController
+         reroutes automatically on its own - this is UI feedback for that,
+         not the rerouting logic itself). -->
+    <TextView
+        android:id="@+id/mnfv3_rerouteView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="16dp"
+        android:background="#CC000000"
+        android:paddingLeft="16dp"
+        android:paddingTop="8dp"
+        android:paddingRight="16dp"
+        android:paddingBottom="8dp"
+        android:text="@string/mnfv3_recalculating_route"
+        android:textColor="#FFFFFF"
+        android:visibility="gone" />
+
 </FrameLayout>

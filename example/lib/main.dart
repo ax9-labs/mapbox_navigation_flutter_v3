@@ -62,6 +62,15 @@ class _MyAppState extends State<MyApp> {
       return;
     }
 
+    // Android 13+ requires this at runtime for Mapbox's own trip-progress
+    // notification (a foreground service notification that keeps the trip
+    // session alive/visible while backgrounded) to actually display -
+    // without it the notification silently doesn't show, and on Android 14+
+    // the OS may kill a location foreground service that has no visible
+    // notification. Declining is non-fatal (navigation still works
+    // foregrounded), so this doesn't gate startup like location does.
+    await Permission.notification.request();
+
     try {
       setState(() => _status = 'Initializing Mapbox...');
       await _plugin.initialize(accessToken: _accessToken);
