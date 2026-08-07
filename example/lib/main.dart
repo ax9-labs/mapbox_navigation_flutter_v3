@@ -1,8 +1,20 @@
 import 'package:flutter/material.dart';
-import 'dart:async';
-
-import 'package:flutter/services.dart';
 import 'package:mapbox_navigation_flutter_v3/mapbox_navigation_flutter_v3.dart';
+import 'package:permission_handler/permission_handler.dart';
+
+/// Pass your public Mapbox access token at build/run time - never commit
+/// one here. e.g.:
+///   flutter run --dart-define=MAPBOX_ACCESS_TOKEN=pk.your-token
+const _accessToken = String.fromEnvironment('MAPBOX_ACCESS_TOKEN');
+
+/// A short drive near San Francisco (Mapbox's own examples use this area).
+/// Swap for coordinates near you if you want to test with real GPS instead
+/// of simulateRoute.
+const _testDestination = NavigationWaypoint(
+  latitude: 37.7676,
+  longitude: -122.4106,
+  name: 'Test destination',
+);
 
 void main() {
   runApp(const MyApp());
@@ -16,43 +28,81 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  String _platformVersion = 'Unknown';
-  final _mapboxNavigationFlutterV3Plugin = MapboxNavigationFlutterV3();
+  final _plugin = MapboxNavigationFlutterV3();
 
-  @override
-  void initState() {
-    super.initState();
-    initPlatformState();
-  }
+  String _status = _accessToken.isEmpty
+      ? 'No MAPBOX_ACCESS_TOKEN provided - see comment in main.dart'
+      : 'Ready';
+  bool _busy = false;
 
-  // Platform messages are asynchronous, so we initialize in an async method.
-  Future<void> initPlatformState() async {
-    String platformVersion;
-    // Platform messages may fail, so we use a try/catch PlatformException.
-    // We also handle the message potentially returning null.
-    try {
-      platformVersion =
-          await _mapboxNavigationFlutterV3Plugin.getPlatformVersion() ?? 'Unknown platform version';
-    } on PlatformException {
-      platformVersion = 'Failed to get platform version.';
+  Future<void> _startNavigation({required bool simulate}) async {
+    if (_accessToken.isEmpty) {
+      setState(() => _status = 'No MAPBOX_ACCESS_TOKEN provided - see comment in main.dart');
+      return;
     }
 
-    // If the widget was removed from the tree while the asynchronous platform
-    // message was in flight, we want to discard the reply rather than calling
-    // setState to update our non-existent appearance.
-    if (!mounted) return;
-
     setState(() {
-      _platformVersion = platformVersion;
+      _busy = true;
+      _status = 'Requesting location permission...';
     });
+
+    final permission = await Permission.locationWhenInUse.request();
+    if (!permission.isGranted) {
+      setState(() {
+        _busy = false;
+        _status = 'Location permission denied';
+      });
+      return;
+    }
+
+    try {
+      setState(() => _status = 'Initializing Mapbox...');
+      await _plugin.initialize(accessToken: _accessToken);
+
+      setState(() => _status = 'Starting navigation...');
+      final result = await _plugin.startNavigation(
+        waypoints: const [_testDestination],
+        options: NavigationOptions(simulateRoute: simulate),
+      );
+
+      setState(() => _status = 'Result: ${result.name}');
+    } on NavigationException catch (e) {
+      setState(() => _status = 'Navigation error: ${e.code} - ${e.message}');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       home: Scaffold(
-        appBar: AppBar(title: const Text('Plugin example app')),
-        body: Center(child: Text('Running on: $_platformVersion\n')),
+        appBar: AppBar(title: const Text('mapbox_navigation_flutter_v3 example')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_status, textAlign: TextAlign.center),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: _busy ? null : () => _startNavigation(simulate: false),
+                  child: const Text('Start navigation (real GPS)'),
+                ),
+                const SizedBox(height: 12),
+                ElevatedButton(
+                  onPressed: _busy ? null : () => _startNavigation(simulate: true),
+                  child: const Text('Start navigation (simulated route)'),
+                ),
+                if (_busy) ...[
+                  const SizedBox(height: 24),
+                  const CircularProgressIndicator(),
+                ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

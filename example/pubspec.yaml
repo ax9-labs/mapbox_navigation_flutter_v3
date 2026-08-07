@@ -29,6 +29,9 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # Requests location permission before starting navigation in the example.
+  permission_handler: ^12.0.0
+
 dev_dependencies:
   integration_test:
     sdk: flutter

@@ -1,17 +1,32 @@
 # mapbox_navigation_flutter_v3_example
 
-Demonstrates how to use the mapbox_navigation_flutter_v3 plugin.
+A minimal test harness for the plugin: two buttons, one starts real
+GPS-driven navigation, the other starts a simulated route (useful on an
+emulator or when you don't want to actually drive anywhere).
 
-## Getting Started
+## Before you run it
 
-This project is a starting point for a Flutter application.
+1. **Mapbox downloads token** (Android only, gates fetching the SDK itself):
+   add to `~/.gradle/gradle.properties` (create the file if it doesn't
+   exist — this is outside any git repo, never commit it):
+   ```properties
+   MAPBOX_DOWNLOADS_TOKEN=sk.your-secret-token
+   ```
+   Needs the `DOWNLOADS:READ` scope. Get one at
+   [account.mapbox.com/access-tokens](https://account.mapbox.com/access-tokens/).
 
-A few resources to get you started if this is your first Flutter project:
+2. **Mapbox public access token** (used at runtime, passed in at launch —
+   never hardcoded):
+   ```bash
+   flutter run --dart-define=MAPBOX_ACCESS_TOKEN=pk.your-public-token
+   ```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+Both tokens are required. The downloads token unblocks the Android build;
+the public token is what the app actually authenticates map/navigation
+requests with.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## What it tests
+
+The example destination is hardcoded near San Francisco
+(`example/lib/main.dart`) — swap it for coordinates near you if you want to
+test with real GPS movement instead of the simulated route.
