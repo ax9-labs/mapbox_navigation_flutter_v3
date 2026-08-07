@@ -26,6 +26,14 @@ class MapboxNavigationFlutterV3 {
   /// see [NavigationMarker] for the custom-bitmap-icon support this
   /// exists for.
   ///
+  /// Throws [ArgumentError] synchronously (before crossing the platform
+  /// channel) for caller mistakes that are cheap to catch here: an empty
+  /// [waypoints] list, or [markers] with duplicate [NavigationMarker.id]
+  /// values. This check runs in release builds too (unlike the `assert`s
+  /// in [NavigationOptions]/[NavigationMarker], which are debug-only) -
+  /// without it, an empty waypoints list would otherwise round-trip all
+  /// the way to a native `NO_WAYPOINTS` error before the caller finds out.
+  ///
   /// Throws [NavigationException] if navigation could not be started at
   /// all (e.g. missing location permission, no access token configured).
   Future<NavigationResult> startNavigation({
@@ -33,6 +41,14 @@ class MapboxNavigationFlutterV3 {
     NavigationOptions options = const NavigationOptions(),
     List<NavigationMarker> markers = const [],
   }) {
+    if (waypoints.isEmpty) {
+      throw ArgumentError.value(waypoints, 'waypoints', 'must not be empty');
+    }
+    final markerIds = markers.map((m) => m.id).toSet();
+    if (markerIds.length != markers.length) {
+      throw ArgumentError.value(markers, 'markers', 'ids must be unique');
+    }
+
     return MapboxNavigationFlutterV3Platform.instance.startNavigation(
       waypoints: waypoints,
       options: options,

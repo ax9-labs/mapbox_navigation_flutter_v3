@@ -97,4 +97,30 @@ void main() {
 
     expect(fakePlatform.lastMarkers, markers);
   });
+
+  test('startNavigation throws ArgumentError for an empty waypoints list', () async {
+    final plugin = MapboxNavigationFlutterV3();
+    MapboxNavigationFlutterV3Platform.instance = MockMapboxNavigationFlutterV3Platform();
+
+    expect(
+      () => plugin.startNavigation(waypoints: const []),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('startNavigation throws ArgumentError for duplicate marker ids', () async {
+    final plugin = MapboxNavigationFlutterV3();
+    MapboxNavigationFlutterV3Platform.instance = MockMapboxNavigationFlutterV3Platform();
+
+    expect(
+      () => plugin.startNavigation(
+        waypoints: const [NavigationWaypoint(latitude: 1, longitude: 2)],
+        markers: [
+          NavigationMarker(id: 'dup', latitude: 1, longitude: 2, icon: Uint8List.fromList([1])),
+          NavigationMarker(id: 'dup', latitude: 3, longitude: 4, icon: Uint8List.fromList([2])),
+        ],
+      ),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
 }

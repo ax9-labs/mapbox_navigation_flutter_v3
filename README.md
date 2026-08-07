@@ -70,7 +70,9 @@ package this org actually maintains.
    `waypoints` (destination only), never prepending the device's current
    location as the origin, even though that's exactly what the Dart API
    promises. Fixed with a one-shot `LocationManager.getLastKnownLocation`
-   lookup, prepended to the coordinates list.
+   lookup, prepended to the coordinates list. **Superseded (see #7 below):**
+   this cache-only approach itself turned out to be unreliable enough to
+   bite us during later testing.
 3. **Simulated route never moved** — `startReplayTripSession()` alone only
    configures replay *mode*; it doesn't feed the replayer any events.
    Nothing happened until a `ReplayProgressObserver` was registered *and*
@@ -101,6 +103,23 @@ package this org actually maintains.
    just via XML inflation). Fixed by adding
    `androidx.constraintlayout:constraintlayout:2.1.4` directly to
    `android/build.gradle.kts`.
+7. **Route origin silently stale** — not a crash, but a real correctness
+   bug found the hard way: `lastKnownLocationPoint()` (bug #2's fix) had no
+   freshness bound at all, and during later testing it returned a location
+   cached from an unrelated earlier test session, silently producing a
+   trivially-already-arrived "route." Fixed by resolving the origin with a
+   single fresh `LocationManager.requestSingleUpdate()` first, falling back
+   to the last-known-location cache only if a fresh fix doesn't arrive
+   within 5s (`NavigationActivity.resolveOrigin`).
+8. **Marker Intent size risk** — not something that crashed in our own
+   testing (only one small test marker was ever used), but identified in a
+   code review as a real latent bug: base64 marker icons were round-tripped
+   through the launch `Intent` as JSON, which risks
+   `TransactionTooLargeException` (Android's Binder transaction buffer is
+   ~1MB total) with more than a handful of real icons — exactly the
+   scenario custom markers exist for. Fixed by moving markers to a
+   same-process in-memory handoff (`PendingNavigationMarkers`) instead;
+   see the Architecture section below.
 
 ### Why "composed" instead of a drop-in screen
 
@@ -139,7 +158,20 @@ final result = await nav.startNavigation(
   ],
   options: const NavigationOptions(
     profile: NavigationProfile.drivingTraffic,
+    // Both optional - defaults (25m / 3x) suit driving; tighten
+    // arrivalDistanceMeters for NavigationProfile.walking, or raise it for
+    // open-highway driving where GPS drift is larger relative to road width.
+    arrivalDistanceMeters: 25,
+    simulateSpeedMultiplier: 3,
   ),
+  markers: [
+    NavigationMarker(
+      id: 'incident-1',
+      latitude: 26.21,
+      longitude: -98.23,
+      icon: incidentIconPngBytes, // must be non-empty; ids must be unique
+    ),
+  ],
 );
 
 switch (result) {
@@ -152,15 +184,42 @@ switch (result) {
 }
 ```
 
+## Architecture (Android)
+
+`NavigationActivity` composes the map/camera/turn-by-turn UI and owns the
+Mapbox Navigation SDK lifecycle, but the pure-logic pieces around it are
+deliberately factored out so they're unit-testable on the plain JVM
+(`./gradlew :mapbox_navigation_flutter_v3:testDebugUnitTest`, no
+Robolectric/emulator needed):
+
+- **`NavigationIntentCodec`** — encodes/decodes waypoints and options
+  to/from the JSON strings carried as launch-`Intent` extras. Decoding is
+  defensive: malformed JSON degrades to an empty list / default options
+  (logged) rather than crashing `onCreate()`.
+- **`MarkerDecoder`** — validates and decodes marker payloads (base64 PNG
+  icons) into `NavigationMarkerData`. A single malformed/oversized marker
+  is dropped (logged) rather than failing the whole session; per-icon
+  (`MAX_ICON_BYTES`) and total (`MAX_MARKERS`) caps guard against
+  pathological input. The Base64/`BitmapFactory` step is injectable
+  (`decodeIcon` parameter) specifically so the validation/cap/error-handling
+  logic has real unit test coverage without needing Robolectric.
+- **`PendingNavigationMarkers`** — same-process, same-pattern-as-
+  `MapboxAccessToken` handoff for decoded marker bitmaps between the
+  plugin and the Activity. Markers used to round-trip through the launch
+  `Intent` as base64 JSON, which risked `TransactionTooLargeException`
+  once real icons were involved (Android's Binder transaction buffer is
+  ~1MB total) — since the Activity always launches in the same process,
+  there's no need to serialize through the Intent/Binder at all.
+
 ## Follow-up work
 
-- [ ] Verify arrival detection (`RESULT_ARRIVED`) actually fires — pick a
-      short simulated route (a couple miles) and let it run to completion.
-- [ ] Test the real-GPS path, not just simulated.
 - [ ] iOS implementation (`NavigationViewController` equivalent using
       Mapbox Navigation SDK v3 for iOS's standalone components).
-- [ ] Maneuver banner, trip progress, speed limit, voice instructions.
 - [ ] Off-route rerouting UI feedback (the SDK reroutes automatically;
       surfacing a "recalculating..." state to the user is not wired up).
 - [ ] Test on a physical device (only tested on an emulator so far).
+- [ ] Surface a specific failure reason for `NavigationResult.error`
+      (currently logged natively via `Log.e`/`Log.w` but not threaded back
+      to Dart — would need a small, deliberately-non-breaking addition to
+      the result contract).
 - [ ] Publish to pub.dev once the above is proven out.

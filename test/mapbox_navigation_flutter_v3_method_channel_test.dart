@@ -86,8 +86,31 @@ void main() {
         'voiceInstructionsEnabled': true,
         'bannerInstructionsEnabled': true,
         'simulateRoute': true,
+        'arrivalDistanceMeters': 25.0,
+        'simulateSpeedMultiplier': 3.0,
       });
       expect(args['markers'], isEmpty);
+    });
+
+    test('serializes custom arrivalDistanceMeters/simulateSpeedMultiplier', () async {
+      MethodCall? received;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+            received = methodCall;
+            return 'arrived';
+          });
+
+      await platform.startNavigation(
+        waypoints: const [NavigationWaypoint(latitude: 0, longitude: 0)],
+        options: const NavigationOptions(
+          arrivalDistanceMeters: 10,
+          simulateSpeedMultiplier: 1.5,
+        ),
+      );
+
+      final args = received!.arguments as Map;
+      expect(args['options'], containsPair('arrivalDistanceMeters', 10.0));
+      expect(args['options'], containsPair('simulateSpeedMultiplier', 1.5));
     });
 
     test('serializes marker icon bytes as base64', () async {

@@ -34,13 +34,15 @@ class NavigationWaypoint {
 /// renders it at its native pixel size scaled by [iconScale], it does not
 /// do its own density adjustment).
 class NavigationMarker {
-  const NavigationMarker({
+  NavigationMarker({
     required this.id,
     required this.latitude,
     required this.longitude,
     required this.icon,
     this.iconScale = 1.0,
-  });
+  })  : assert(id != '', 'id must not be empty'),
+        assert(icon.isNotEmpty, 'icon must not be empty'),
+        assert(iconScale > 0, 'iconScale must be positive');
 
   /// Caller-assigned identifier. Not currently used natively beyond
   /// round-tripping (no per-marker update/remove API yet - markers are
@@ -81,7 +83,10 @@ class NavigationOptions {
     this.voiceInstructionsEnabled = true,
     this.bannerInstructionsEnabled = true,
     this.simulateRoute = false,
-  });
+    this.arrivalDistanceMeters = 25,
+    this.simulateSpeedMultiplier = 3,
+  })  : assert(arrivalDistanceMeters > 0, 'arrivalDistanceMeters must be positive'),
+        assert(simulateSpeedMultiplier > 0, 'simulateSpeedMultiplier must be positive');
 
   final NavigationProfile profile;
 
@@ -94,12 +99,26 @@ class NavigationOptions {
   /// of using real GPS - useful for testing without driving anywhere.
   final bool simulateRoute;
 
+  /// How close (in meters) the user must get to the final waypoint before
+  /// [NavigationResult.arrived] fires. The 25m default suits driving; a
+  /// tighter value is likely more appropriate for
+  /// [NavigationProfile.walking], and a looser one for open highway
+  /// driving where GPS drift is larger relative to road width.
+  final double arrivalDistanceMeters;
+
+  /// Playback speed multiplier used only when [simulateRoute] is true -
+  /// has no effect on real-GPS sessions. Dev/QA convenience for shortening
+  /// how long a simulated drive takes to observe.
+  final double simulateSpeedMultiplier;
+
   Map<String, Object?> toJson() => {
         'profile': profile.wireValue,
         'language': language,
         'voiceInstructionsEnabled': voiceInstructionsEnabled,
         'bannerInstructionsEnabled': bannerInstructionsEnabled,
         'simulateRoute': simulateRoute,
+        'arrivalDistanceMeters': arrivalDistanceMeters,
+        'simulateSpeedMultiplier': simulateSpeedMultiplier,
       };
 }
 

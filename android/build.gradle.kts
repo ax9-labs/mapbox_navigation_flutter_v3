@@ -69,6 +69,16 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+            // Lets stubbed Android SDK calls we don't fake explicitly
+            // (android.util.Log, in this module's tests) return a default
+            // value instead of throwing "not mocked" - the alternative is
+            // Robolectric, which is unnecessary weight for this module's
+            // logic-only test surface (see NavigationIntentCodecTest /
+            // MarkerDecoderTest, which inject around the two real Android
+            // calls - org.json via a real implementation below, and
+            // Base64/BitmapFactory via [MarkerDecoder.decodeMarkers]'s
+            // `decodeIcon` parameter - rather than relying on this flag).
+            isReturnDefaultValues = true
             all {
                 it.useJUnitPlatform()
 
@@ -101,4 +111,9 @@ dependencies {
 
     testImplementation("org.jetbrains.kotlin:kotlin-test")
     testImplementation("org.mockito:mockito-core:5.0.0")
+    // A real org.json implementation for the test classpath - the one
+    // bundled in android.jar is a compile-only stub whose methods throw at
+    // runtime, which would otherwise make NavigationIntentCodecTest's real
+    // JSONObject/JSONArray usage fail with "not mocked" outside Robolectric.
+    testImplementation("org.json:json:20240303")
 }

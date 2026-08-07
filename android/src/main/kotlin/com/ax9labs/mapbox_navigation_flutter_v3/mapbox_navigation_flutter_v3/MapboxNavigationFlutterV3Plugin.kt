@@ -2,6 +2,7 @@ package com.ax9labs.mapbox_navigation_flutter_v3.mapbox_navigation_flutter_v3
 
 import android.app.Activity
 import android.content.Intent
+import android.util.Log
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -74,20 +75,27 @@ class MapboxNavigationFlutterV3Plugin :
         @Suppress("UNCHECKED_CAST")
         val options = call.argument<Map<String, Any?>>("options") ?: emptyMap()
         @Suppress("UNCHECKED_CAST")
-        val markers = call.argument<List<Map<String, Any?>>>("markers") ?: emptyList()
+        val rawMarkers = call.argument<List<Map<String, Any?>>>("markers") ?: emptyList()
 
         if (waypoints.isNullOrEmpty()) {
             result.error("NO_WAYPOINTS", "At least one waypoint is required", null)
             return
         }
 
+        // Decoded here (not in NavigationActivity) and handed off via
+        // PendingNavigationMarkers rather than the launch Intent - base64
+        // icon bytes in an Intent extra risk TransactionTooLargeException
+        // once real icons are involved (Android's Binder transaction
+        // buffer is ~1MB total). See PendingNavigationMarkers for the full
+        // rationale.
+        PendingNavigationMarkers.value = MarkerDecoder.decodeMarkers(rawMarkers)
+
         pendingResult = result
         val intent =
             NavigationActivity.newIntent(
                 context = currentActivity,
                 waypoints = waypoints,
-                options = options,
-                markers = markers
+                options = options
             )
         currentActivity.startActivityForResult(intent, NAVIGATION_REQUEST_CODE)
     }
@@ -100,6 +108,7 @@ class MapboxNavigationFlutterV3Plugin :
         if (requestCode != NAVIGATION_REQUEST_CODE) return false
 
         val outcome = data?.getStringExtra(NavigationActivity.EXTRA_RESULT) ?: "error"
+        Log.d(TAG, "Navigation session finished: $outcome")
         pendingResult?.success(outcome)
         pendingResult = null
         return true
@@ -134,6 +143,7 @@ class MapboxNavigationFlutterV3Plugin :
     }
 
     companion object {
+        private const val TAG = "MapboxNavFlutterV3Plugin"
         private const val NAVIGATION_REQUEST_CODE = 0x4E4156 // "NAV"
     }
 }

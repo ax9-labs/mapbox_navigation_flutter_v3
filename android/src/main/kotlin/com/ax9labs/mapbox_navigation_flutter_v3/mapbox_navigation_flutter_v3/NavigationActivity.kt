@@ -3,11 +3,13 @@ package com.ax9labs.mapbox_navigation_flutter_v3.mapbox_navigation_flutter_v3
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.location.Location
+import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
-import android.util.Base64
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import com.mapbox.api.directions.v5.models.RouteOptions
@@ -56,8 +58,6 @@ import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineApiOptions
 import com.mapbox.navigation.ui.maps.route.line.model.MapboxRouteLineViewOptions
 import com.mapbox.navigation.voice.api.MapboxSpeechApi
 import com.mapbox.navigation.voice.api.MapboxVoiceInstructionsPlayer
-import org.json.JSONArray
-import org.json.JSONObject
 
 /**
  * Hosts turn-by-turn navigation full-screen, composed from Mapbox Navigation
@@ -73,6 +73,10 @@ import org.json.JSONObject
  * CustomArrivalActivity, ShowManeuversActivity, ShowTripProgressActivity,
  * PlayVoiceInstructionsActivity) and mapbox-maps-android's
  * PointAnnotationActivity.
+ *
+ * Intent/JSON parsing lives in [NavigationIntentCodec] (waypoints/options)
+ * and [MarkerDecoder] (markers) rather than inline here, so that logic is
+ * unit-testable independent of the Activity lifecycle.
  */
 @OptIn(ExperimentalPreviewMapboxNavigationAPI::class)
 class NavigationActivity : AppCompatActivity() {
@@ -94,6 +98,7 @@ class NavigationActivity : AppCompatActivity() {
     private var arrived = false
     private var finishedWithResult = false
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val navigationLocationProvider = NavigationLocationProvider()
 
     /**
@@ -148,6 +153,7 @@ class NavigationActivity : AppCompatActivity() {
                     maneuverView.isVisible = true
                     maneuverView.renderManeuvers(maneuvers)
                 }
+                maneuvers.onError { error -> Log.w(TAG, "Failed to compute maneuvers: ${error.errorMessage}") }
             }
 
             tripProgressView.isVisible = true
@@ -157,8 +163,9 @@ class NavigationActivity : AppCompatActivity() {
             // (CustomArrivalActivity) - there is no single "arrived" event,
             // so proximity to the destination plus distance-remaining is
             // treated as arrival.
-            if (!arrived && routeProgress.distanceRemaining <= ARRIVAL_DISTANCE_THRESHOLD_METERS) {
+            if (!arrived && routeProgress.distanceRemaining <= startOptions.arrivalDistanceMeters) {
                 arrived = true
+                Log.d(TAG, "Arrived: distanceRemaining=${routeProgress.distanceRemaining}m <= threshold=${startOptions.arrivalDistanceMeters}m")
                 finishWithResult(RESULT_ARRIVED)
             }
         }
@@ -216,7 +223,9 @@ class NavigationActivity : AppCompatActivity() {
                     mapboxNavigation.unregisterLocationObserver(locationObserver)
                     mapboxNavigation.unregisterRouteProgressObserver(routeProgressObserver)
                     mapboxNavigation.unregisterRoutesObserver(routesObserver)
-                    mapboxNavigation.unregisterVoiceInstructionsObserver(voiceInstructionsObserver)
+                    if (startOptions.voiceInstructionsEnabled) {
+                        mapboxNavigation.unregisterVoiceInstructionsObserver(voiceInstructionsObserver)
+                    }
                 }
             },
         onInitialize = this::initNavigation
@@ -227,8 +236,9 @@ class NavigationActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         val accessToken = MapboxAccessToken.value
-        val parsedWaypoints = parseWaypoints(intent)
+        val parsedWaypoints = NavigationIntentCodec.decodeWaypoints(intent.getStringExtra(EXTRA_WAYPOINTS))
         if (accessToken == null || parsedWaypoints.isEmpty()) {
+            Log.e(TAG, "Cannot start navigation: accessToken=${accessToken != null}, waypoints=${parsedWaypoints.size}")
             setResult(RESULT_OK, Intent().putExtra(EXTRA_RESULT, RESULT_ERROR))
             finish()
             return
@@ -236,8 +246,9 @@ class NavigationActivity : AppCompatActivity() {
         MapboxOptions.accessToken = accessToken
         waypoints = parsedWaypoints
         destination = parsedWaypoints.last()
-        startOptions = parseOptions(intent)
-        markers = parseMarkers(intent)
+        startOptions = NavigationIntentCodec.decodeOptions(intent.getStringExtra(EXTRA_OPTIONS))
+        markers = PendingNavigationMarkers.consume()
+        Log.d(TAG, "Starting navigation: ${waypoints.size} waypoint(s), ${markers.size} marker(s), options=$startOptions")
 
         setContentView(R.layout.mnfv3_activity_navigation)
         mapView = findViewById(R.id.mnfv3_mapView)
@@ -324,33 +335,102 @@ class NavigationActivity : AppCompatActivity() {
                     .withIconSize(marker.iconScale)
             )
         }
+        Log.d(TAG, "Rendered ${markers.size} marker(s)")
     }
 
     /**
      * The Dart API promises navigation "from the device's current location
      * through waypoints" - callers only pass the destination(s), not an
-     * origin. This does the one-shot current-location fetch that makes
-     * that true. (First real build surfaced this as a live bug: without
-     * it, `coordinatesList(waypoints)` sent a single-point request and
-     * Mapbox's Directions API correctly rejected it with "minimum number
-     * of coordinates is 2".)
+     * origin. This resolves that origin with a single fresh location
+     * request, falling back to the last-known-location cache only if a
+     * fresh fix doesn't arrive within [LOCATION_TIMEOUT_MS].
+     *
+     * Originally this used only `LocationManager.getLastKnownLocation()`
+     * across all providers - simpler, but the cache has no freshness bound
+     * at all. We hit this directly during testing: a location fixed
+     * earlier in an unrelated test session was still returned as "last
+     * known" and used as the route origin, silently producing a wrong (or
+     * trivially-already-arrived) route. A real navigation session should
+     * not silently trust a fix that could be minutes or hours old.
      */
     @SuppressLint("MissingPermission")
-    private fun lastKnownLocationPoint(): Point? {
-        val locationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
-        return locationManager.allProviders
-            .mapNotNull { provider -> runCatching { locationManager.getLastKnownLocation(provider) }.getOrNull() }
+    private fun resolveOrigin(onResult: (Point?) -> Unit) {
+        val locationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        if (locationManager == null) {
+            onResult(lastKnownLocationPoint(null))
+            return
+        }
+        val provider =
+            when {
+                locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
+                locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
+                else -> null
+            }
+        if (provider == null) {
+            Log.w(TAG, "No enabled location provider; falling back to last-known-location cache")
+            onResult(lastKnownLocationPoint(locationManager))
+            return
+        }
+
+        var resolved = false
+        val listener =
+            object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    if (resolved) return
+                    resolved = true
+                    mainHandler.removeCallbacksAndMessages(TIMEOUT_TOKEN)
+                    locationManager.removeUpdates(this)
+                    Log.d(TAG, "Resolved fresh origin from $provider")
+                    onResult(Point.fromLngLat(location.longitude, location.latitude))
+                }
+            }
+
+        mainHandler.postAtTime(
+            {
+                if (resolved) return@postAtTime
+                resolved = true
+                locationManager.removeUpdates(listener)
+                Log.w(TAG, "Fresh location request timed out after ${LOCATION_TIMEOUT_MS}ms; falling back to last-known-location cache")
+                onResult(lastKnownLocationPoint(locationManager))
+            },
+            TIMEOUT_TOKEN,
+            android.os.SystemClock.uptimeMillis() + LOCATION_TIMEOUT_MS
+        )
+
+        runCatching {
+            locationManager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+        }.onFailure {
+            resolved = true
+            mainHandler.removeCallbacksAndMessages(TIMEOUT_TOKEN)
+            Log.w(TAG, "requestSingleUpdate failed, falling back to last-known-location cache: ${it.message}")
+            onResult(lastKnownLocationPoint(locationManager))
+        }
+    }
+
+    /** Fallback only - see [resolveOrigin] for why a fresh fix is preferred. */
+    private fun lastKnownLocationPoint(locationManager: LocationManager?): Point? {
+        val manager = locationManager ?: (getSystemService(Context.LOCATION_SERVICE) as? LocationManager) ?: return null
+        return manager.allProviders
+            .mapNotNull { provider -> runCatching { manager.getLastKnownLocation(provider) }.getOrNull() }
             .maxByOrNull { it.time }
             ?.let { Point.fromLngLat(it.longitude, it.latitude) }
     }
 
     private fun requestRoute(mapboxNavigation: MapboxNavigation) {
-        val origin = lastKnownLocationPoint()
-        if (origin == null) {
-            finishWithResult(RESULT_ERROR)
-            return
+        resolveOrigin { origin ->
+            if (origin == null) {
+                Log.e(TAG, "No location available to use as route origin")
+                finishWithResult(RESULT_ERROR)
+                return@resolveOrigin
+            }
+            requestRouteFromOrigin(mapboxNavigation, origin)
         }
+    }
 
+    private fun requestRouteFromOrigin(
+        mapboxNavigation: MapboxNavigation,
+        origin: Point
+    ) {
         val routeOptions =
             RouteOptions
                 .builder()
@@ -369,6 +449,7 @@ class NavigationActivity : AppCompatActivity() {
                     routes: List<NavigationRoute>,
                     routerOrigin: String
                 ) {
+                    Log.d(TAG, "Route ready from $routerOrigin (${routes.size} route(s))")
                     mapboxNavigation.setNavigationRoutes(routes)
                     if (startOptions.simulateRoute) {
                         startSimulatedTripSession(mapboxNavigation, origin)
@@ -381,6 +462,7 @@ class NavigationActivity : AppCompatActivity() {
                     reasons: List<RouterFailure>,
                     routeOptions: RouteOptions
                 ) {
+                    Log.e(TAG, "Route request failed: ${reasons.joinToString { it.message }}")
                     finishWithResult(RESULT_ERROR)
                 }
 
@@ -388,6 +470,7 @@ class NavigationActivity : AppCompatActivity() {
                     routeOptions: RouteOptions,
                     routerOrigin: String
                 ) {
+                    Log.w(TAG, "Route request canceled (routerOrigin=$routerOrigin)")
                     finishWithResult(RESULT_ERROR)
                 }
             }
@@ -416,7 +499,7 @@ class NavigationActivity : AppCompatActivity() {
                 listOf(ReplayRouteMapper.mapToUpdateLocation(System.currentTimeMillis().toDouble(), origin))
             )
             playFirstLocation()
-            playbackSpeed(3.0)
+            playbackSpeed(startOptions.simulateSpeedMultiplier)
             play()
         }
     }
@@ -428,6 +511,7 @@ class NavigationActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        mainHandler.removeCallbacksAndMessages(TIMEOUT_TOKEN)
         if (::routeLineApi.isInitialized) routeLineApi.cancel()
         if (::routeLineView.isInitialized) routeLineView.cancel()
         if (::maneuverApi.isInitialized) maneuverApi.cancel()
@@ -451,131 +535,33 @@ class NavigationActivity : AppCompatActivity() {
         finish()
     }
 
-    private data class NavigationStartOptions(
-        val profile: String,
-        val language: String,
-        val voiceInstructionsEnabled: Boolean,
-        val bannerInstructionsEnabled: Boolean,
-        val simulateRoute: Boolean
-    )
-
-    private data class NavigationMarkerData(
-        val id: String,
-        val point: Point,
-        val bitmap: Bitmap,
-        val iconScale: Double
-    )
-
-    private fun parseWaypoints(intent: Intent): List<Point> {
-        val json = intent.getStringExtra(EXTRA_WAYPOINTS) ?: return emptyList()
-        val array = JSONArray(json)
-        return (0 until array.length()).map { i ->
-            val obj = array.getJSONObject(i)
-            Point.fromLngLat(obj.getDouble("longitude"), obj.getDouble("latitude"))
-        }
-    }
-
-    private fun parseOptions(intent: Intent): NavigationStartOptions {
-        val json = intent.getStringExtra(EXTRA_OPTIONS)
-        val obj = if (json != null) JSONObject(json) else JSONObject()
-        return NavigationStartOptions(
-            profile = obj.optString("profile", "driving-traffic"),
-            language = obj.optString("language", "en"),
-            voiceInstructionsEnabled = obj.optBoolean("voiceInstructionsEnabled", true),
-            bannerInstructionsEnabled = obj.optBoolean("bannerInstructionsEnabled", true),
-            simulateRoute = obj.optBoolean("simulateRoute", false)
-        )
-    }
-
-    /**
-     * Marker icons cross the platform channel as base64-encoded PNG bytes
-     * (see [NavigationMarker] on the Dart side) - JSON has no native binary
-     * type, and this keeps the Intent extra a plain string like waypoints/
-     * options above. Malformed entries (bad base64, undecodable image
-     * bytes) are dropped rather than crashing navigation startup.
-     */
-    private fun parseMarkers(intent: Intent): List<NavigationMarkerData> {
-        val json = intent.getStringExtra(EXTRA_MARKERS) ?: return emptyList()
-        val array = JSONArray(json)
-        return (0 until array.length()).mapNotNull { i ->
-            runCatching {
-                val obj = array.getJSONObject(i)
-                val bytes = Base64.decode(obj.getString("icon"), Base64.DEFAULT)
-                // Mapbox's annotation image path (ExtensionUtils.toMapboxImage)
-                // hard-requires ARGB_8888 and throws otherwise - found only by
-                // running this on a real device: decodeByteArray's config
-                // depends on the source PNG's color type (e.g. an
-                // ImageMagick-generated indexed/paletted PNG decoded as
-                // RGB_565), so it must be forced explicitly rather than
-                // relying on the decoder's default.
-                val decodeOptions = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
-                val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions) ?: return@mapNotNull null
-                val bitmap =
-                    if (decoded.config == Bitmap.Config.ARGB_8888) {
-                        decoded
-                    } else {
-                        decoded.copy(Bitmap.Config.ARGB_8888, false).also { decoded.recycle() }
-                    }
-                NavigationMarkerData(
-                    id = obj.getString("id"),
-                    point = Point.fromLngLat(obj.getDouble("longitude"), obj.getDouble("latitude")),
-                    bitmap = bitmap,
-                    iconScale = obj.optDouble("iconScale", 1.0)
-                )
-            }.getOrNull()
-        }
-    }
-
     companion object {
+        private const val TAG = "NavigationActivity"
+
         const val EXTRA_RESULT = "com.ax9labs.mapbox_navigation_flutter_v3.RESULT"
         private const val EXTRA_WAYPOINTS = "com.ax9labs.mapbox_navigation_flutter_v3.WAYPOINTS"
         private const val EXTRA_OPTIONS = "com.ax9labs.mapbox_navigation_flutter_v3.OPTIONS"
-        private const val EXTRA_MARKERS = "com.ax9labs.mapbox_navigation_flutter_v3.MARKERS"
 
         const val RESULT_ARRIVED = "arrived"
         const val RESULT_CANCELLED = "cancelled"
         const val RESULT_ERROR = "error"
 
-        private const val ARRIVAL_DISTANCE_THRESHOLD_METERS = 25.0
+        private const val LOCATION_TIMEOUT_MS = 5_000L
+        private const val TIMEOUT_TOKEN = "resolve-origin-timeout"
 
+        /**
+         * Markers are handed off via [PendingNavigationMarkers], not this
+         * Intent, so callers must set that before invoking this. See
+         * [PendingNavigationMarkers] for why.
+         */
         fun newIntent(
             context: Context,
             waypoints: List<Map<String, Any?>>,
-            options: Map<String, Any?>,
-            markers: List<Map<String, Any?>> = emptyList()
-        ): Intent {
-            val waypointsJson =
-                JSONArray().apply {
-                    waypoints.forEach { w ->
-                        put(
-                            JSONObject().apply {
-                                put("latitude", w["latitude"])
-                                put("longitude", w["longitude"])
-                                put("name", w["name"])
-                            }
-                        )
-                    }
-                }
-            val markersJson =
-                JSONArray().apply {
-                    markers.forEach { m ->
-                        put(
-                            JSONObject().apply {
-                                put("id", m["id"])
-                                put("latitude", m["latitude"])
-                                put("longitude", m["longitude"])
-                                put("icon", m["icon"])
-                                put("iconScale", m["iconScale"])
-                            }
-                        )
-                    }
-                }
-            val optionsJson = JSONObject(options)
-            return Intent(context, NavigationActivity::class.java)
-                .putExtra(EXTRA_WAYPOINTS, waypointsJson.toString())
-                .putExtra(EXTRA_OPTIONS, optionsJson.toString())
-                .putExtra(EXTRA_MARKERS, markersJson.toString())
-        }
+            options: Map<String, Any?>
+        ): Intent =
+            Intent(context, NavigationActivity::class.java)
+                .putExtra(EXTRA_WAYPOINTS, NavigationIntentCodec.encodeWaypoints(waypoints))
+                .putExtra(EXTRA_OPTIONS, NavigationIntentCodec.encodeOptions(options))
     }
 }
 
