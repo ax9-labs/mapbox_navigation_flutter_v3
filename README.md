@@ -6,21 +6,53 @@ Full-screen turn-by-turn navigation for Flutter, built directly on
 `flutter_mapbox_navigation` (unmaintained, breaks on Android 14/15) with a
 package this org actually maintains.
 
-## Status (honest, as of first commit)
+## Status (honest, as of the first real device/emulator test)
 
 - **Dart API**: real, tested, stable — `initialize()`, `startNavigation()`,
   models. This won't need to change even as the native side evolves.
-- **Android**: real implementation, **not yet compiled against the actual
-  Mapbox SDK** — see [Blocker](#blocker-mapbox_downloads_token) below.
-  Covers: route request, route line rendered on the map, a
-  following camera, and arrival/cancel detection.
-  **Not yet included**: turn-by-turn maneuver banner, trip progress bar,
-  speed limit badge, voice instructions. Each is a real, separate Mapbox
-  SDK component (`MapboxManeuverApi`/`View`, `MapboxTripProgressApi`/`View`,
-  `MapboxVoiceInstructionsPlayer`) — same pattern as what's already wired
-  up, just not done yet.
+- **Android**: **verified working on a real emulator (Android 16 / API 36,
+  16KB page size image).** Route request → route line on the map →
+  simulated drive (`ReplayProgressObserver`-driven) → following camera all
+  confirmed working end to end via `example/`'s "simulated route" button.
+  Fixed three real bugs found only by actually running it (see Fixed
+  section below) — the compiler alone did not catch these.
+  **Not yet included/verified**: arrival detection (`RESULT_ARRIVED`) has
+  code but wasn't observed firing in this pass (destination was ~40mi from
+  origin, too long to wait out at test time); real-GPS path (as opposed to
+  simulated) untested; maneuver banner, trip progress bar, speed limit
+  badge, voice instructions are not wired up at all yet — each is a real,
+  separate Mapbox SDK component (`MapboxManeuverApi`/`View`,
+  `MapboxTripProgressApi`/`View`, `MapboxVoiceInstructionsPlayer`), same
+  pattern as what's already working, just not done.
 - **iOS**: not implemented. `startNavigation` currently returns a
   `NOT_IMPLEMENTED` error rather than hanging silently.
+
+### Fixed by actually running it (not caught by the compiler)
+
+1. **`IllegalStateException: MapboxNavigation cannot be null`** — the
+   `by requireMapboxNavigation(...)` delegate was force-triggered
+   synchronously at the tail of `onCreate()`, before the Activity's
+   lifecycle had finished reaching `CREATED`. Fixed by moving first access
+   to `onStart()`.
+2. **`Not enough input coordinates given; minimum number of coordinates is
+   2`** — the route request was built straight from the Dart-supplied
+   `waypoints` (destination only), never prepending the device's current
+   location as the origin, even though that's exactly what the Dart API
+   promises. Fixed with a one-shot `LocationManager.getLastKnownLocation`
+   lookup, prepended to the coordinates list.
+3. **Simulated route never moved** — `startReplayTripSession()` alone only
+   configures replay *mode*; it doesn't feed the replayer any events.
+   Nothing happened until a `ReplayProgressObserver` was registered *and*
+   seeded with one `ReplayRouteMapper.mapToUpdateLocation` event at the
+   origin — from there it self-sustains off route-progress ticks.
+4. **Repo scoping** (`example/android/build.gradle.kts`, not the Kotlin
+   code): the Mapbox Maven repo was originally declared only in the
+   plugin's own `build.gradle.kts`. A module's `allprojects {}` only
+   configures that module (it has no subprojects of its own) — it doesn't
+   propagate to `:app`, which is what actually resolves the final
+   dependency graph. **Every app consuming this plugin needs the same
+   Mapbox repo block in its own root `build.gradle.kts`** — see
+   `example/android/build.gradle.kts` for the exact block to copy.
 
 ### Why "composed" instead of a drop-in screen
 
@@ -74,12 +106,13 @@ switch (result) {
 
 ## Follow-up work
 
-- [ ] Get a `MAPBOX_DOWNLOADS_TOKEN` and do a real first build; fix whatever
-      the compiler finds (some class/method names here are grounded in
-      Mapbox's current example source but haven't been compile-verified).
+- [ ] Verify arrival detection (`RESULT_ARRIVED`) actually fires — pick a
+      short simulated route (a couple miles) and let it run to completion.
+- [ ] Test the real-GPS path, not just simulated.
 - [ ] iOS implementation (`NavigationViewController` equivalent using
       Mapbox Navigation SDK v3 for iOS's standalone components).
 - [ ] Maneuver banner, trip progress, speed limit, voice instructions.
 - [ ] Off-route rerouting UI feedback (the SDK reroutes automatically;
       surfacing a "recalculating..." state to the user is not wired up).
-- [ ] Publish to pub.dev once the above is proven out on a real device.
+- [ ] Test on a physical device (only tested on an emulator so far).
+- [ ] Publish to pub.dev once the above is proven out.
