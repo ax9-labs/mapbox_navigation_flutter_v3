@@ -10,20 +10,30 @@ package this org actually maintains.
 
 - **Dart API**: real, tested, stable — `initialize()`, `startNavigation()`,
   models. This won't need to change even as the native side evolves.
-- **Android**: **verified working on a real emulator (Android 16 / API 36,
-  16KB page size image).** Route request → route line on the map →
-  simulated drive (`ReplayProgressObserver`-driven) → following camera all
-  confirmed working end to end via `example/`'s "simulated route" button.
-  Fixed three real bugs found only by actually running it (see Fixed
-  section below) — the compiler alone did not catch these.
-  **Not yet included/verified**: arrival detection (`RESULT_ARRIVED`) has
-  code but wasn't observed firing in this pass (destination was ~40mi from
-  origin, too long to wait out at test time); real-GPS path (as opposed to
-  simulated) untested; maneuver banner, trip progress bar, speed limit
-  badge, voice instructions are not wired up at all yet — each is a real,
-  separate Mapbox SDK component (`MapboxManeuverApi`/`View`,
+- **Android**: **the full happy-path matrix is verified working on a real
+  emulator (Android 16 / API 36, 16KB page size image)**, via `example/`'s
+  two buttons:
+  - Route request (device location → destination) → Mapbox returns a
+    valid route → route line rendered on the map.
+  - Simulated drive (`ReplayProgressObserver`-driven): puck moves,
+    following camera tracks it at street-level zoom, **arrival correctly
+    fires `RESULT_ARRIVED`** (confirmed with a short ~500m test route).
+  - Real-GPS-driven trip session (`replay enabled: false`, fed via
+    `adb emu geo fix` standing in for real GPS): same arrival detection
+    confirmed working on this path too, independently of the replay path.
+  - Cancel (back-press mid-navigation) → `RESULT_CANCELLED`, confirmed.
+  - Malformed input (missing origin) → fails closed with `RESULT_ERROR`
+    instead of crashing, confirmed.
+  Four real bugs were found and fixed only by actually running it (see
+  Fixed section below) — the compiler alone did not catch any of them.
+  **Not yet built**: maneuver banner, trip progress bar, speed limit
+  badge, voice instructions, and off-route rerouting UI feedback — each
+  is a real, separate Mapbox SDK component (`MapboxManeuverApi`/`View`,
   `MapboxTripProgressApi`/`View`, `MapboxVoiceInstructionsPlayer`), same
-  pattern as what's already working, just not done.
+  pattern as what's already working, just not done. Also untested: a
+  physical device (only an emulator so far) and a real multi-minute drive
+  with actual maneuvers along the way (both test routes were short,
+  mostly-straight-line for practical testing reasons).
 - **iOS**: not implemented. `startNavigation` currently returns a
   `NOT_IMPLEMENTED` error rather than hanging silently.
 

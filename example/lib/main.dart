@@ -7,12 +7,12 @@ import 'package:permission_handler/permission_handler.dart';
 ///   flutter run --dart-define=MAPBOX_ACCESS_TOKEN=pk.your-token
 const _accessToken = String.fromEnvironment('MAPBOX_ACCESS_TOKEN');
 
-/// A short drive near San Francisco (Mapbox's own examples use this area).
-/// Swap for coordinates near you if you want to test with real GPS instead
-/// of simulateRoute.
+/// A short (~500m) drive, close enough to the device's actual last-known
+/// location to let arrival detection fire quickly during testing. Swap
+/// for coordinates near wherever your test device/emulator actually is.
 const _testDestination = NavigationWaypoint(
-  latitude: 37.7676,
-  longitude: -122.4106,
+  latitude: 26.2075,
+  longitude: -98.2270,
   name: 'Test destination',
 );
 
