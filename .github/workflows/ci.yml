@@ -41,3 +41,38 @@ jobs:
         working-directory: example
       - run: ./gradlew :mapbox_navigation_flutter_v3:testDebugUnitTest
         working-directory: example/android
+
+  ios-build:
+    name: iOS example build (simulator)
+    runs-on: macos-latest
+    # Same MAPBOX_DOWNLOADS_TOKEN secret as the Android job above, but a
+    # different auth transport: Swift Package Manager resolves Mapbox's
+    # private package registry via ~/.netrc HTTP Basic auth, not a Gradle
+    # property - see README.md ("iOS equivalent: ~/.netrc"). Without it,
+    # this job fails at `flutter pub get`/package resolution, not the
+    # build itself.
+    env:
+      MAPBOX_DOWNLOADS_TOKEN: ${{ secrets.MAPBOX_DOWNLOADS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Configure ~/.netrc for Mapbox SPM registry auth
+        run: |
+          cat <<EOF > ~/.netrc
+          machine api.mapbox.com
+          login mapbox
+          password ${MAPBOX_DOWNLOADS_TOKEN}
+          EOF
+          chmod 600 ~/.netrc
+      - run: flutter config --enable-swift-package-manager
+      - run: flutter pub get
+        working-directory: example
+      # A build-time-only placeholder token is fine here: `flutter build
+      # ios --simulator` compiles and links the app but never launches it,
+      # so it never hits the runtime MBXAccessToken check (see README.md,
+      # "iOS access token setup") - a real token is only needed to
+      # actually run/test the app, not to build it.
+      - run: MAPBOX_ACCESS_TOKEN=pk.ci-placeholder flutter build ios --simulator --debug --dart-define=MAPBOX_ACCESS_TOKEN=pk.ci-placeholder
+        working-directory: example

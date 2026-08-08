@@ -15,7 +15,17 @@ A new Flutter plugin project.
   s.source           = { :path => '.' }
   s.source_files = 'mapbox_navigation_flutter_v3/Sources/mapbox_navigation_flutter_v3/**/*'
   s.dependency 'Flutter'
-  s.platform = :ios, '13.0'
+  s.platform = :ios, '14.0'
+
+  # IMPORTANT: Mapbox Navigation SDK v3 for iOS is distributed via Swift
+  # Package Manager only - there is no CocoaPods pod for
+  # MapboxNavigationCore/MapboxNavigationUIKit v3. This podspec exists
+  # because `flutter create --template=plugin` always generates one, but a
+  # host app that resolves this plugin purely via CocoaPods will fail to
+  # compile (the Mapbox imports won't resolve). Consumers must use
+  # Flutter's Swift Package Manager plugin support (Flutter 3.24+) - see
+  # README.md. The actual Mapbox dependency is declared in
+  # mapbox_navigation_flutter_v3/Package.swift, not here.
 
   # Flutter.framework does not contain a i386 slice.
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }

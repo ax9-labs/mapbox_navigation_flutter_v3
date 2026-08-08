@@ -1,6 +1,6 @@
 name: mapbox_navigation_flutter_v3
-description: "Full-screen turn-by-turn navigation for Flutter, built on Mapbox Navigation SDK v3's standalone components (Android). iOS not yet implemented."
-version: 0.0.1
+description: "Full-screen turn-by-turn navigation for Flutter, built on Mapbox Navigation SDK v3 (Android standalone components, iOS drop-in NavigationViewController)."
+version: 0.1.0
 homepage: https://github.com/ax9-labs/mapbox_navigation_flutter_v3
 repository: https://github.com/ax9-labs/mapbox_navigation_flutter_v3
 

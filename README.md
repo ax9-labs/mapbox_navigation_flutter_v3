@@ -1,10 +1,13 @@
 # mapbox_navigation_flutter_v3
 
-Full-screen turn-by-turn navigation for Flutter, built directly on
-[Mapbox Navigation SDK v3](https://docs.mapbox.com/android/navigation/guides/)
-(Android; iOS not yet implemented). Written to replace
-`flutter_mapbox_navigation` (unmaintained, breaks on Android 14/15) with a
-package this org actually maintains.
+Full-screen turn-by-turn navigation for Flutter, built directly on Mapbox
+Navigation SDK v3 - Android's
+[standalone components](https://docs.mapbox.com/android/navigation/guides/),
+composed into a custom UI, and iOS's turnkey
+[`NavigationViewController`](https://docs.mapbox.com/ios/navigation/guides/)
+drop-in UI, themed to match. Written to replace `flutter_mapbox_navigation`
+(unmaintained, breaks on Android 14/15) with a package this org actually
+maintains.
 
 [![CI](https://github.com/ax9-labs/mapbox_navigation_flutter_v3/actions/workflows/ci.yml/badge.svg)](https://github.com/ax9-labs/mapbox_navigation_flutter_v3/actions/workflows/ci.yml)
 
@@ -77,8 +80,39 @@ Gradle dependency resolution rather than at the tests themselves.
   routes were short and mostly straight-line for practical testing
   reasons) — see `PHYSICAL_DEVICE_TESTING.md` for the runbook covering
   what's left.
-- **iOS**: not implemented. `startNavigation` currently returns a
-  `NOT_IMPLEMENTED` error rather than hanging silently.
+- **iOS**: implemented on top of Mapbox's own turnkey
+  `NavigationViewController` (unlike Android, iOS v3 still ships a drop-in
+  UI, so there's no custom bottom sheet/maneuver-banner to build - see
+  Architecture below). Verified so far, on the iOS Simulator:
+  - Package resolves and compiles clean via Swift Package Manager
+    (`flutter build ios`), pulling Mapbox Common/Core Maps/Maps/Navigation
+    and their transitive deps.
+  - App launches and reaches the example's "Ready" state without
+    crashing.
+  - **Found and fixed a real crash this way, not by inspection**: even
+    though `initialize(accessToken:)` sets `MapboxOptions.accessToken` at
+    Dart-call time, `MapboxNavigationCore`'s own `ApiConfiguration.default`
+    reads `MBXAccessToken` from `Info.plist` independently (and caches the
+    result in a `let` the first time anything touches it) - so on iOS,
+    unlike Android, the token cannot be *purely* runtime-supplied; it also
+    needs to be present in `Info.plist` by the time the app launches. See
+    "iOS access token setup" below for how the example wires this without
+    hardcoding a secret.
+  - **A full simulated-route session, tap-through, on the Simulator, with
+    a real Mapbox public token, is confirmed working end to end** (driven
+    via `idb`, since `simctl` has no touch/tap subcommand of its own):
+    tapping "Start navigation (simulated route)" → real
+    `calculateRoutes(options:)` request returns a valid route →
+    `NavigationViewController` presents with live map tiles, the route
+    line, and a moving puck → maneuver banner and trip-progress bar update
+    in real time as the simulated drive progresses ("West Dallas Avenue"
+    200ft → "Date Palm Avenue" 0.5mi, "3 min / 0.8mi" → "2 min / 0.6mi") →
+    Mapbox's own "You have arrived" screen appears → tapping "End
+    Navigation" dismisses cleanly back to the Flutter app showing
+    `Result: arrived`, round-tripped correctly through
+    `NavigationViewControllerDelegate` → the method channel → the Dart
+    `NavigationResult` enum. Not yet run: the real-GPS path (as opposed to
+    simulated) and a physical device - see iOS follow-up work.
 
 ### Fixed by actually running it (not caught by the compiler)
 
@@ -181,6 +215,53 @@ dependency, so the Android module hasn't been compiled yet.
    MAPBOX_DOWNLOADS_TOKEN=sk.your-secret-token
    ```
 3. Build the `example/` app.
+
+### iOS equivalent: `~/.netrc`
+
+Mapbox Navigation SDK v3 for iOS ships via Swift Package Manager only (no
+CocoaPods pod exists for it) - `Package.swift` declares the dependency, and
+Flutter's SPM plugin support (3.24+, must be enabled once via
+`flutter config --enable-swift-package-manager`) resolves it. The private
+package registry needs the same `DOWNLOADS:READ`-scoped token as Android,
+but via a different auth transport - `git`/`curl`-style HTTP Basic auth in
+`~/.netrc`, not a Gradle property:
+
+```
+machine api.mapbox.com
+login mapbox
+password sk.your-secret-token
+```
+
+First resolution clones the full SDK repos (Mapbox Navigation, Mapbox Maps,
+and their own transitive deps) via `git clone --mirror` - multiple hundred
+MB, one-time cost, cached by SwiftPM afterwards
+(`~/Library/Caches/org.swift.swiftpm`).
+
+### iOS access token setup
+
+Unlike Android (where `initialize(accessToken:)` alone is sufficient),
+iOS's `MapboxNavigationCore` reads its access token from `Info.plist`'s
+`MBXAccessToken` key independently of anything set at Dart-call time, and
+caches whatever it finds (or doesn't) the first time that lookup happens -
+see the Status section above for how this was found. `example/ios/Runner/
+Info.plist` sets it to `$(MAPBOX_ACCESS_TOKEN)`, an Xcode build setting
+resolved from the environment at build time (Xcode exposes arbitrary
+inherited shell environment variables as build settings automatically), so
+set the same value the Dart side uses before building/running:
+
+```bash
+export MAPBOX_ACCESS_TOKEN=pk.your-public-token
+flutter run --dart-define=MAPBOX_ACCESS_TOKEN=$MAPBOX_ACCESS_TOKEN
+```
+
+Consumers embedding this plugin in their own app should do the same in
+their `ios/Runner/Info.plist` (or hardcode a real public token there
+directly - Mapbox public tokens are meant to ship inside client apps,
+unlike the `DOWNLOADS:READ` secret token above).
+
+The example's iOS deployment target is 14.0 (bumped up from Flutter's
+default 13.0), the minimum the Mapbox iOS package requires - a consuming
+app's own `ios/Podfile`/Xcode project needs the same minimum.
 
 ## Usage
 
@@ -291,6 +372,41 @@ and an encode/decode step for no benefit. (This is unrelated to the
 Intent-size fix above, which was about the *plugin → Activity* leg, not
 the *Dart → plugin* leg.)
 
+## Architecture (iOS)
+
+iOS v3 (unlike Android v3) still ships a turnkey drop-in
+`NavigationViewController` - maneuver banner, trip progress, voice, camera,
+and arrival detection are all built in. This makes the iOS side much
+smaller than Android's: there's no custom bottom sheet, maneuver-banner
+view, or camera state machine to build - `NavigationCoordinator` is mostly
+configuration and glue, not UI construction:
+
+- **`NavigationCoordinator`** — the iOS counterpart to `NavigationActivity`,
+  but scoped to configuration rather than UI: resolves a fresh origin
+  (`OriginResolver`, the same fresh-fix-with-timeout-fallback pattern as
+  Android's `resolveOrigin()`, for the same reason - a location cache with
+  no freshness bound risks silently using a stale fix as the route origin),
+  requests a route via `RoutingProvider.calculateRoutes(options:)`
+  (Swift's `async`/`await`, no completion-handler boilerplate), and
+  presents `NavigationViewController` with a themed style + congestion
+  config + markers. `@MainActor`-isolated throughout, since
+  `MapboxNavigationProvider`/`RouteVoiceController`/`NavigationMapView`
+  all are.
+- **`NavigationTheme`** — maps `TurnByTurnTheme` onto Mapbox's own
+  `DayStyle`/`NightStyle` via `UIAppearance` proxy styling (the same
+  mechanism Mapbox's own examples use) rather than a custom view
+  hierarchy, since there's no custom view hierarchy here to theme -
+  congestion colors go through `NavigationMapView.congestionConfiguration`
+  instead, since that's not a `UIAppearance` property.
+- **`TurnByTurnTheme`/`TurnByTurnUiOptions`/`NavigationStartOptions`/
+  `MarkerDecoder`** — direct Swift ports of the Android Kotlin decoders,
+  same field-for-field behavior. One simplification: since iOS never
+  leaves the host app's process (no separate "Activity" launched via
+  `Intent` the way Android does), there's no JSON round-trip layer -
+  everything decodes straight from the `[String: Any]`/`[[String: Any]]`
+  dictionaries Flutter's method channel already provides, and marker icons
+  arrive as `FlutterStandardTypedData` (no base64, same as Android).
+
 ### Error handling
 
 `startNavigation()` only returns `NavigationResult.arrived` or
@@ -302,11 +418,35 @@ message)` instead. `code` is a stable, switchable identifier:
 `NOT_INITIALIZED`, `NO_WAYPOINTS`, `NO_ACTIVITY`, `ALREADY_NAVIGATING`,
 `LOCATION_PERMISSION_DENIED`, `LOCATION_PROVIDER_DISABLED`,
 `LOCATION_UNAVAILABLE`, `ROUTE_REQUEST_FAILED`, `ROUTE_REQUEST_CANCELED`.
+iOS currently implements this same set except `LOCATION_PROVIDER_DISABLED`
+and `ROUTE_REQUEST_CANCELED` (Mapbox's iOS routing API doesn't expose a
+distinct disabled-provider signal or cancellation as separate cases the
+way Android's does) - a route request failure surfaces as
+`ROUTE_REQUEST_FAILED` on both platforms either way.
 
 ## Follow-up work
 
-- [ ] iOS implementation (`NavigationViewController` equivalent using
-      Mapbox Navigation SDK v3 for iOS's standalone components).
+- [x] iOS implementation (`NavigationCoordinator` presenting Mapbox's
+      turnkey `NavigationViewController`, themed to match) - see
+      Architecture (iOS) above.
+- [x] iOS tap-through verification with a real Mapbox public token
+      (simulated-route path): route request → drop-in UI renders live map/
+      route/puck → maneuver banner and trip progress update in real time →
+      arrival screen → clean dismissal back to `Result: arrived`. Driven
+      via `idb` (`brew install idb-companion` + `pip3 install --user
+      fb-idb`), since `simctl` has no tap subcommand of its own.
+- [ ] Same tap-through check on the real-GPS path (`Start navigation (real
+      GPS)`), not just the simulated-route path above.
+- [ ] iOS physical-device verification, mirroring the Android runbook -
+      background/lock-screen survival (does `NavigationViewController`'s
+      session survive backgrounding the same way Android's foreground
+      trip session does?), a real multi-turn drive, audio interruption,
+      voice-guidance background-audio-mode behavior.
+- [ ] Migrate the example's Xcode project fully to Swift Package Manager
+      (`pod deintegrate` + remove `Podfile`) - it currently builds fine
+      with SPM-for-our-plugin alongside legacy CocoaPods integration for
+      everything else, but Flutter's own tooling flags this as a
+      recommended cleanup for build time.
 - [ ] Physical-device verification — see `PHYSICAL_DEVICE_TESTING.md` for
       the runbook (background/lock-screen survival, a real multi-turn
       drive, audio interruption, notification permission UX, marker/
@@ -328,4 +468,10 @@ message)` instead. `code` is a stable, switchable identifier:
       or does the whole trip session (not just this plugin's own UI
       observers) tear down with it? This needs a real device to answer
       honestly — see the runbook.
+- [ ] Add an iOS job to CI (`flutter build ios --simulator --no-codesign`)
+      alongside the existing Android job - needs a repo secret with a
+      `DOWNLOADS:READ` token wired into `~/.netrc` in the workflow (same
+      token as `MAPBOX_DOWNLOADS_TOKEN`, different transport - see "iOS
+      equivalent: `~/.netrc`" above), which requires repo-settings access
+      this session didn't have.
 - [ ] Publish to pub.dev once the above is proven out.
